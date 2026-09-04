@@ -1819,21 +1819,9 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"type": "tool_round_limit", "message": err.Error(), "completed_calls": len(activeLedger.Completed)}})
 		return
 	}
-	// Context budget sliding window: B = ContextWindow - MaxOutput - 512, atom-aware.
-	cfgBudget := s.settings.get()
-	budget := cfgBudget.ContextWindow - cfgBudget.MaxOutputTokens - 512
-	if budget < 1024 {
-		budget = 1024
-	}
-	if truncatedMsgs, truncated, budgetErr := slidingWindow(body.Messages, budget); budgetErr != nil {
-		w.Header().Set("X-M365-Context-Truncated", "1")
-		writeOpenAIError(w, 400, "context_length_exceeded", budgetErr.Error())
-		return
-	} else if truncated {
-		w.Header().Set("X-M365-Context-Truncated", "1")
-		log.Printf("[context-budget] id=%s truncated original=%d budget=%d truncated_msgs=%d", requestID, len(body.Messages), budget, len(truncatedMsgs))
-		body.Messages = truncatedMsgs
-	}
+	// Gateway must not truncate context. All messages are forwarded as-is and
+	// any limit is left to the upstream M365 service and the client's own
+	// budgeting. See https://github.com/HEXUXIU/M365-Copilot2API/issues/73
 	// Preserve role boundaries when adapting OpenAI messages to ChatHub's
 	// single message.text field. This keeps system/developer instructions,
 	// history, and the current user turn distinguishable.
@@ -1888,13 +1876,14 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[temp-session] copilot_temp_session=true, clearing conversation/session for one-shot request")
 	}
 	answerPrompt := prompt
+	convCacheNamespace := responseNamespace(tenantFromRequest(r), firstNonEmpty(responseSessionID(r), body.SessionKey, body.User))
 	resolvedConversationID := ""
 	if body.ConversationID == "" && len(body.Messages) > 0 && (body.Metadata == nil || !body.Metadata.CopilotTempSession) {
 		resolved := s.sessionResolver.Resolve(r, &body)
 		if !resolved.IsNew {
 			if maxMessages := s.settings.get().MaxConversationMessages; shouldRotateResolvedConversation(resolved.HistoryLen, len(body.Messages), maxMessages) {
 				log.Printf("[session-resolver] rotating conversation=%s history=%d limit=%d", resolved.ConversationID, resolved.HistoryLen, maxMessages)
-				s.convCache.Invalidate(resolved.AccountID, firstNonEmpty(body.Model, "m365-copilot"))
+				s.convCache.Invalidate(convCacheNamespace, resolved.AccountID, firstNonEmpty(body.Model, "m365-copilot"))
 			} else {
 				resolvedConversationID = resolved.ConversationID
 				body.ConversationID = resolved.ConversationID
@@ -1945,7 +1934,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	if body.ConversationID == "" && len(body.Messages) > 1 &&
 		(body.Metadata == nil || !body.Metadata.CopilotTempSession) {
 		sysHash := systemPromptHash(body.Messages)
-		if cached := s.convCache.Lookup(acc.ID, convCacheModel); cached != nil && cached.SystemPrompt == sysHash && !shouldRotateConversation(cached.MessageCount, s.settings.get().MaxConversationMessages) {
+		if cached := s.convCache.Lookup(convCacheNamespace, acc.ID, convCacheModel); cached != nil && cached.SystemPrompt == sysHash && !shouldRotateConversation(cached.MessageCount, s.settings.get().MaxConversationMessages) {
 			if len(body.Messages) > cached.MessageCount {
 				incPrompt, incAtt := flattenPromptMessages(body.Messages[cached.MessageCount:], nil)
 				incPrompt = strings.TrimSpace(incPrompt)
@@ -2221,7 +2210,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 				s.accountPool.MarkImageLimited(acc.ID)
 			}
 			if convReused {
-				s.invalidateConvCache(acc.ID, convCacheModel)
+				s.invalidateConvCache(convCacheNamespace, acc.ID, convCacheModel)
 			}
 			msg := upstreamError(err)
 			if IsRateLimited(err) {
@@ -2305,7 +2294,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 				s.userSessions.Put(tenantFromRequest(r), body.User, res.ConversationID, res.SessionID, acc.ID)
 			}
 			s.bindConversation(acc, &body, r, res, answerPrompt, startedAt)
-			s.storeConvCache(acc.ID, convCacheModel, res, tone, body.Messages, convReused)
+			s.storeConvCache(convCacheNamespace, acc.ID, convCacheModel, res, tone, body.Messages, convReused)
 			return
 		}
 		finishChunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}}
@@ -2324,7 +2313,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 			s.userSessions.Put(tenantFromRequest(r), body.User, res.ConversationID, res.SessionID, acc.ID)
 		}
 		s.bindConversation(acc, &body, r, res, answerPrompt, startedAt)
-		s.storeConvCache(acc.ID, convCacheModel, res, tone, body.Messages, convReused)
+		s.storeConvCache(convCacheNamespace, acc.ID, convCacheModel, res, tone, body.Messages, convReused)
 		return
 	}
 	// Ask the upstream model to select and validate the next tool. The gateway
@@ -2550,7 +2539,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 				s.accountPool.MarkImageLimited(acc.ID)
 			}
 			if convReused {
-				s.invalidateConvCache(acc.ID, convCacheModel)
+				s.invalidateConvCache(convCacheNamespace, acc.ID, convCacheModel)
 			}
 			msg := upstreamError(err)
 			if IsRateLimited(err) {
@@ -2633,7 +2622,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			s.accountPool.MarkImageLimited(acc.ID)
 		}
 		if convReused {
-			s.invalidateConvCache(acc.ID, convCacheModel)
+			s.invalidateConvCache(convCacheNamespace, acc.ID, convCacheModel)
 			log.Printf("[conv-cache] invalidated account=%s model=%s after error: %v", acc.ID, convCacheModel, err)
 		}
 		writeUpstreamErrorWithAccount(w, err, acc.ID)
@@ -2648,7 +2637,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			s.userSessions.Put(tenantFromRequest(r), body.User, res.ConversationID, res.SessionID, acc.ID)
 		}
 		s.bindConversation(acc, &body, r, res, prompt, startedAt)
-		s.storeConvCache(acc.ID, convCacheModel, res, tone, body.Messages, convReused)
+		s.storeConvCache(convCacheNamespace, acc.ID, convCacheModel, res, tone, body.Messages, convReused)
 		return
 	}
 
@@ -2661,7 +2650,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 	}
 	if res.ConversationID != "" {
 		s.bindConversation(acc, &body, r, res, prompt, startedAt)
-		s.storeConvCache(acc.ID, convCacheModel, res, tone, body.Messages, convReused)
+		s.storeConvCache(convCacheNamespace, acc.ID, convCacheModel, res, tone, body.Messages, convReused)
 	}
 	if res.ConversationID != "" {
 		resolved := s.sessionResolver.Resolve(r, &body)

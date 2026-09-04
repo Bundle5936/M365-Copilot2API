@@ -34,9 +34,6 @@ type responsesRequest struct {
 
 func (r responsesRequest) openAI() (oaiReq, error) {
 	o := oaiReq{Model: r.Model, AccountID: r.AccountID, Stream: r.Stream, ToolChoice: r.ToolChoice, ParallelToolCalls: r.ParallelToolCalls, Reasoning: r.Reasoning, User: r.User}
-	if len(r.Include) != 0 {
-		return o, fmt.Errorf("unsupported_parameter: include")
-	}
 	if len(r.Text) != 0 {
 		return o, fmt.Errorf("unsupported_parameter: text")
 	}

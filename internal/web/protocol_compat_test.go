@@ -14,6 +14,14 @@ func TestResponsesToOpenAI(t *testing.T) {
 	}
 }
 
+func TestResponsesIncludeIsAcceptedForClientCompatibility(t *testing.T) {
+	r := responsesRequest{Model: "m", Input: "hello", Include: []string{"reasoning.encrypted_content"}}
+	o, err := r.openAI()
+	if err != nil || len(o.Messages) != 1 {
+		t.Fatalf("openAI()=%+v, err=%v", o, err)
+	}
+}
+
 func TestResponseNamespaceIsolatesTenantAndSession(t *testing.T) {
 	if responseNamespace("tenant-a", "shared") == responseNamespace("tenant-b", "shared") {
 		t.Fatal("different tenants share a response namespace")
@@ -109,6 +117,18 @@ func TestResponsesCustomToolOutputToOpenAI(t *testing.T) {
 	}
 	if err := validateToolConversation(o.Messages); err != nil {
 		t.Fatalf("custom tool continuation rejected: %v", err)
+	}
+}
+
+func TestValidateToolConversationAllowsReusedCallIDAfterCompletion(t *testing.T) {
+	messages := []oaiMsg{
+		{Role: "assistant", ToolCalls: []map[string]any{{"id": "bash:0"}}},
+		{Role: "tool", ToolCallID: "bash:0"},
+		{Role: "assistant", ToolCalls: []map[string]any{{"id": "bash:0"}}},
+		{Role: "tool", ToolCallID: "bash:0"},
+	}
+	if err := validateToolConversation(messages); err != nil {
+		t.Fatalf("completed tool call ID reuse rejected: %v", err)
 	}
 }
 
