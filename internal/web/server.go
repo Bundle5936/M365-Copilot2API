@@ -1877,6 +1877,9 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	}
 	answerPrompt := prompt
 	convCacheNamespace := responseNamespace(tenantFromRequest(r), firstNonEmpty(responseSessionID(r), body.SessionKey, body.User))
+	convCacheModel := firstNonEmpty(body.Model, "m365-copilot")
+	convReused := false
+	convCachedMessageCount := 0
 	resolvedConversationID := ""
 	if body.ConversationID == "" && len(body.Messages) > 0 && (body.Metadata == nil || !body.Metadata.CopilotTempSession) {
 		resolved := s.sessionResolver.Resolve(r, &body)
@@ -1896,6 +1899,10 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 					if incPrompt != "" {
 						answerPrompt = incPrompt
 						body.Attachments = incAtt
+						// The resolver reused an existing ChatHub conversation even
+						// though this request bypassed convCache.Lookup.
+						convReused = true
+						convCachedMessageCount = resolved.HistoryLen
 					}
 				}
 			}
@@ -1929,8 +1936,6 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	// to avoid re-processing full system prompt + history each request (latency
 	// drops from 3-5s to ~1s). Only kicks in when no explicit conversation ID
 	// was provided by client, session key, user session, or session resolver.
-	convReused := false
-	convCacheModel := firstNonEmpty(body.Model, "m365-copilot")
 	if body.ConversationID == "" && len(body.Messages) > 1 &&
 		(body.Metadata == nil || !body.Metadata.CopilotTempSession) {
 		sysHash := systemPromptHash(body.Messages)
@@ -1944,6 +1949,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 					answerPrompt = incPrompt
 					body.Attachments = incAtt
 					convReused = true
+					convCachedMessageCount = cached.MessageCount
 					log.Printf("[conv-cache] hit account=%s model=%s conversation=%s cached_msgs=%d new_msgs=%d", acc.ID, convCacheModel, cached.ConversationID, cached.MessageCount, len(body.Messages))
 				}
 			}
@@ -2059,7 +2065,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 			if body.ParallelToolCalls != nil && !*body.ParallelToolCalls && len(calls) > 1 {
 				calls = calls[:1]
 			}
-			_ = writeToolResponse(w, "chatcmpl-"+uuid.NewString(), firstNonEmpty(body.Model, "m365-copilot"), true, body.shouldSendStreamUsage(), calls, routeRes)
+			_ = writeToolResponse(w, "chatcmpl-"+uuid.NewString(), firstNonEmpty(body.Model, "m365-copilot"), true, body.shouldSendStreamUsage(), calls, routeRes, buildOpenAIUsage(firstNonEmpty(body.Model, "m365-copilot"), body.Messages, body.Tools, body.ToolChoice, routeRes.Text, convReused, convCachedMessageCount))
 			return
 		}
 	}
@@ -2104,11 +2110,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		var streamedTools []detectedToolCall
 		first := true
 		identityFilter := newPublicIdentityStreamFilter(model)
-		emitText := func(part string) error {
-			if part == "" {
-				return nil
-			}
-			part = identityFilter.Push(part)
+		emitRaw := func(part string) error {
 			if part == "" {
 				return nil
 			}
@@ -2125,6 +2127,13 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			return nil
+		}
+		emitText := func(part string) error {
+			if part == "" {
+				return nil
+			}
+			part = identityFilter.Push(part)
+			return emitRaw(part)
 		}
 		res, err := s.chatWithAccountEvents(ctx, acc.ID, account, answerReq, func(ev chathub.StreamEvent) error {
 			if ev.Kind == "tool" && ev.ToolName != "" && len(ev.Arguments) > 0 {
@@ -2289,15 +2298,34 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 			if body.ParallelToolCalls != nil && !*body.ParallelToolCalls && len(calls) > 1 {
 				calls = calls[:1]
 			}
-			_ = writeToolResponse(w, id, model, true, body.shouldSendStreamUsage(), calls, toolResult)
+			usageMap := buildOpenAIUsage(model, body.Messages, body.Tools, body.ToolChoice, text.String(), convReused, convCachedMessageCount)
+			_ = writeToolResponse(w, id, model, true, body.shouldSendStreamUsage(), calls, toolResult, usageMap)
 			if body.User != "" && res.ConversationID != "" {
 				s.userSessions.Put(tenantFromRequest(r), body.User, res.ConversationID, res.SessionID, acc.ID)
 			}
-			s.bindConversation(acc, &body, r, res, answerPrompt, startedAt)
+			s.bindConversation(acc, &body, r, res, answerPrompt, startedAt, convReused, convCachedMessageCount)
 			s.storeConvCache(convCacheNamespace, acc.ID, convCacheModel, res, tone, body.Messages, convReused)
 			return
 		}
-		finishChunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}}
+		if pending.Len() > 0 {
+			_ = emitText(pending.String())
+			pending.Reset()
+		}
+		if tail := identityFilter.Flush(); tail != "" {
+			_ = emitRaw(tail)
+		}
+		if first && strings.TrimSpace(res.Text) != "" {
+			_ = emitRaw(res.Text)
+		}
+		usageMap := buildOpenAIUsage(model, body.Messages, body.Tools, body.ToolChoice, text.String(), convReused, convCachedMessageCount)
+		finishChunk := map[string]any{
+			"id":      id,
+			"object":  "chat.completion.chunk",
+			"created": time.Now().Unix(),
+			"model":   model,
+			"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}},
+			"usage":   usageMap,
+		}
 		if res.Throttling != nil {
 			finishChunk["x_m365_throttling"] = res.Throttling
 		}
@@ -2305,6 +2333,17 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 			finishChunk["x_m365_scores"] = res.Scores
 		}
 		_ = sw.data(mustJSON(finishChunk))
+		if body.shouldSendStreamUsage() {
+			usageChunk := map[string]any{
+				"id":      id,
+				"object":  "chat.completion.chunk",
+				"created": time.Now().Unix(),
+				"model":   model,
+				"choices": []any{},
+				"usage":   usageMap,
+			}
+			_ = sw.data(mustJSON(usageChunk))
+		}
 		_ = sw.data("[DONE]")
 		if res.Timestamps.RequestSent != "" {
 			_ = sw.raw(": m365-metrics " + mustJSON(res.Timestamps) + "\n\n")
@@ -2312,7 +2351,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		if body.User != "" && res.ConversationID != "" {
 			s.userSessions.Put(tenantFromRequest(r), body.User, res.ConversationID, res.SessionID, acc.ID)
 		}
-		s.bindConversation(acc, &body, r, res, answerPrompt, startedAt)
+		s.bindConversation(acc, &body, r, res, answerPrompt, startedAt, convReused, convCachedMessageCount)
 		s.storeConvCache(convCacheNamespace, acc.ID, convCacheModel, res, tone, body.Messages, convReused)
 		return
 	}
@@ -2363,7 +2402,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 			if body.ParallelToolCalls != nil && !*body.ParallelToolCalls && len(calls) > 1 {
 				calls = calls[:1]
 			}
-			_ = writeToolResponse(w, "chatcmpl-"+uuid.NewString(), firstNonEmpty(body.Model, "m365-copilot"), body.Stream, body.shouldSendStreamUsage(), calls, routeRes)
+			_ = writeToolResponse(w, "chatcmpl-"+uuid.NewString(), firstNonEmpty(body.Model, "m365-copilot"), body.Stream, body.shouldSendStreamUsage(), calls, routeRes, buildOpenAIUsage(firstNonEmpty(body.Model, "m365-copilot"), body.Messages, body.Tools, body.ToolChoice, routeRes.Text, convReused, convCachedMessageCount))
 			return
 		}
 		if fmt.Sprint(body.ToolChoice) == "required" {
@@ -2385,7 +2424,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 					if body.ParallelToolCalls != nil && !*body.ParallelToolCalls && len(calls) > 1 {
 						calls = calls[:1]
 					}
-					_ = writeToolResponse(w, "chatcmpl-"+uuid.NewString(), firstNonEmpty(body.Model, "m365-copilot"), body.Stream, body.shouldSendStreamUsage(), calls, retryRes)
+					_ = writeToolResponse(w, "chatcmpl-"+uuid.NewString(), firstNonEmpty(body.Model, "m365-copilot"), body.Stream, body.shouldSendStreamUsage(), calls, retryRes, buildOpenAIUsage(firstNonEmpty(body.Model, "m365-copilot"), body.Messages, body.Tools, body.ToolChoice, retryRes.Text, convReused, convCachedMessageCount))
 					return
 				}
 			}
@@ -2551,9 +2590,10 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			msg = sanitizePublicInternalText(msg)
 			_ = sseRaw(r.Context(), w, flusher, "data: "+mustJSON(map[string]any{"error": map[string]any{"message": msg, "code": "rate_limit"}})+"\n\n")
 		}
-		pt := EstimateTokens(prompt)
-		ct := EstimateTokens(res.Text)
-		log.Printf("[usage] stream id=%s pt=%d ct=%d res.Text=%d", id, pt, ct, len(res.Text))
+		usageMap := buildOpenAIUsage(model, body.Messages, body.Tools, body.ToolChoice, res.Text, convReused, convCachedMessageCount)
+		pt, _ := usageMap["prompt_tokens"].(int)
+		ct, _ := usageMap["completion_tokens"].(int)
+		log.Printf("[usage] stream id=%s pt=%d ct=%d res.Text=%d cached=%v", id, pt, ct, len(res.Text), usageMap["prompt_tokens_details"])
 		if err == nil && ct == 0 {
 			_ = sseRaw(r.Context(), w, flusher, "data: "+mustJSON(map[string]any{"error": map[string]any{"message": "upstream returned empty completion; the requested model may be unavailable for this tenant", "code": "upstream_error"}})+"\n\n")
 		}
@@ -2561,7 +2601,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 		if err != nil {
 			finish = "error"
 		}
-		usageChunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": finish}}, "usage": map[string]any{"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct}}
+		usageChunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": finish}}, "usage": usageMap}
 		if res.Throttling != nil {
 			usageChunk["x_m365_throttling"] = res.Throttling
 		}
@@ -2636,7 +2676,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 		if body.User != "" && res.ConversationID != "" {
 			s.userSessions.Put(tenantFromRequest(r), body.User, res.ConversationID, res.SessionID, acc.ID)
 		}
-		s.bindConversation(acc, &body, r, res, prompt, startedAt)
+		s.bindConversation(acc, &body, r, res, prompt, startedAt, convReused, convCachedMessageCount)
 		s.storeConvCache(convCacheNamespace, acc.ID, convCacheModel, res, tone, body.Messages, convReused)
 		return
 	}
@@ -2649,7 +2689,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 		log.Printf("[user-session] put user=%s conversation=%s session=%s", body.User, res.ConversationID, res.SessionID)
 	}
 	if res.ConversationID != "" {
-		s.bindConversation(acc, &body, r, res, prompt, startedAt)
+		s.bindConversation(acc, &body, r, res, prompt, startedAt, convReused, convCachedMessageCount)
 		s.storeConvCache(convCacheNamespace, acc.ID, convCacheModel, res, tone, body.Messages, convReused)
 	}
 	if res.ConversationID != "" {
@@ -2688,7 +2728,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			if body.ParallelToolCalls != nil && !*body.ParallelToolCalls && len(calls) > 1 {
 				calls = calls[:1]
 			}
-			_ = writeToolResponse(w, id, model, body.Stream, body.shouldSendStreamUsage(), calls, res)
+			_ = writeToolResponse(w, id, model, body.Stream, body.shouldSendStreamUsage(), calls, res, buildOpenAIUsage(model, body.Messages, body.Tools, body.ToolChoice, res.Text, convReused, convCachedMessageCount))
 			return
 		}
 	}
@@ -2700,7 +2740,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			if body.ParallelToolCalls != nil && !*body.ParallelToolCalls && len(calls) > 1 {
 				calls = calls[:1]
 			}
-			_ = writeToolResponse(w, id, model, body.Stream, body.shouldSendStreamUsage(), calls, res)
+			_ = writeToolResponse(w, id, model, body.Stream, body.shouldSendStreamUsage(), calls, res, buildOpenAIUsage(model, body.Messages, body.Tools, body.ToolChoice, res.Text, convReused, convCachedMessageCount))
 			return
 		}
 	}
@@ -2715,7 +2755,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			if body.ParallelToolCalls != nil && !*body.ParallelToolCalls && len(calls) > 1 {
 				calls = calls[:1]
 			}
-			_ = writeToolResponse(w, id, model, body.Stream, body.shouldSendStreamUsage(), calls, res)
+			_ = writeToolResponse(w, id, model, body.Stream, body.shouldSendStreamUsage(), calls, res, buildOpenAIUsage(model, body.Messages, body.Tools, body.ToolChoice, res.Text, convReused, convCachedMessageCount))
 			return
 		}
 	}
@@ -2739,7 +2779,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 					calls[i].ID = scopedCallID(calls[i].Name, string(calls[i].Arguments), i, scope)
 				}
 				calls = limitToolCalls(calls, adaptiveToolCallLimit(calls, configuredToolCallLimit(s.settings)))
-				_ = writeToolResponse(w, id, model, body.Stream, body.shouldSendStreamUsage(), calls, routeRes)
+				_ = writeToolResponse(w, id, model, body.Stream, body.shouldSendStreamUsage(), calls, routeRes, buildOpenAIUsage(model, body.Messages, body.Tools, body.ToolChoice, routeRes.Text, convReused, convCachedMessageCount))
 				return
 			}
 		}
@@ -2839,8 +2879,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 	}
 	// 上游 ChatHub 不返回 token 计数，按请求/回复文本本地估算填充
 	// OpenAI 要求的 usage 字段。
-	pt := EstimateTokens(prompt)
-	ct := EstimateTokens(res.Text)
+	usageMap := buildOpenAIUsage(model, body.Messages, body.Tools, body.ToolChoice, res.Text, convReused, convCachedMessageCount)
 	if res.Timestamps.RequestSent != "" {
 		w.Header().Set("X-M365-Metrics", mustJSON(res.Timestamps))
 	}
@@ -2864,12 +2903,8 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			"message":       assistant,
 			"finish_reason": "stop",
 		}},
-		"m365": compatM365Metadata(res),
-		"usage": map[string]any{
-			"prompt_tokens":     pt,
-			"completion_tokens": ct,
-			"total_tokens":      pt + ct,
-		},
+		"m365": compatM365Metadata(res, model),
+		"usage": usageMap,
 	})
 }
 
@@ -2940,7 +2975,7 @@ const sessionHeaderName = "X-M365-Session-Id"
 // bindConversation 在请求完成后登记会话解析器索引与缓存统计，流式与非流式
 // 路径共用。会话为内容键，云端的对话由 auto_cleanup 按 2h 闲置窗口回收，
 // 这里不再做"用完即删"，否则复用永远不可能命中。
-func (s *Server) bindConversation(acc auth.AccountToken, body *oaiReq, r *http.Request, res chathub.Result, prompt string, startedAt time.Time) {
+func (s *Server) bindConversation(acc auth.AccountToken, body *oaiReq, r *http.Request, res chathub.Result, prompt string, startedAt time.Time, convReused bool, convCachedMessageCount int) {
 	if res.ConversationID == "" {
 		return
 	}
@@ -2959,27 +2994,30 @@ func (s *Server) bindConversation(acc auth.AccountToken, body *oaiReq, r *http.R
 	}
 
 	apiKey := extractAPIKey(r)
-	historyTokens := int64(0)
-	upper := len(body.Messages) - 1
-	if upper < 0 {
-		upper = 0
+	model := firstNonEmpty(body.Model, "m365-copilot")
+	usageMap := buildOpenAIUsage(model, body.Messages, body.Tools, body.ToolChoice, res.Text, convReused, convCachedMessageCount)
+	inputTokens, _ := usageMap["prompt_tokens"].(int)
+	outputTokens, _ := usageMap["completion_tokens"].(int)
+	cachedTokens := 0
+	if details, ok := usageMap["prompt_tokens_details"].(map[string]any); ok {
+		cachedTokens, _ = details["cached_tokens"].(int)
 	}
-	for _, msg := range body.Messages[:upper] {
-		historyTokens += EstimateTokens(contentToString(msg.Content))
+	if inputTokens < cachedTokens {
+		cachedTokens = inputTokens
 	}
-	newTokens := EstimateTokens(prompt)
+	uncachedInputTokens := inputTokens - cachedTokens
 	sessions := s.sessionResolver.ListSessions()
-	cacheStats.RecordRequest(apiKey, historyTokens > 0, newTokens, historyTokens, len(sessions))
+	cacheStats.RecordRequest(apiKey, convReused, int64(uncachedInputTokens), int64(cachedTokens), len(sessions))
 	s.usage.record(UsageRecord{
 		Time:         time.Now(),
 		APIKeyPrefix: apiKey,
 		AccountEmail: acc.Email,
-		Model:        firstNonEmpty(body.Model, "m365-copilot"),
+		Model:        model,
 		Endpoint:     "/v1/chat/completions",
 		Stream:       body.Stream,
-		InputTokens:  newTokens,
-		OutputTokens: EstimateTokens(res.Text),
-		CacheTokens:  historyTokens,
+		InputTokens:  int64(uncachedInputTokens),
+		OutputTokens: int64(outputTokens),
+		CacheTokens:  int64(cachedTokens),
 		DurationMs:   time.Since(startedAt).Milliseconds(),
 		Status:       200,
 	})

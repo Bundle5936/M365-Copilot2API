@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 )
 
-func writeToolResponse(w http.ResponseWriter, id, model string, stream bool, sendUsage bool, calls []detectedToolCall, res chathub.Result) error {
+func writeToolResponse(w http.ResponseWriter, id, model string, stream bool, sendUsage bool, calls []detectedToolCall, res chathub.Result, usageOverrides ...map[string]any) error {
 	toolCalls := toolCallMaps(calls)
 	msg := map[string]any{"role": "assistant", "content": nil, "tool_calls": toolCalls}
 	if res.Reasoning != "" {
@@ -15,11 +15,25 @@ func writeToolResponse(w http.ResponseWriter, id, model string, stream bool, sen
 			msg["reasoning_content"] = reasoning
 		}
 	}
-	pt := EstimateTokens(res.Text)
-	for _, tc := range calls {
-		pt += EstimateTokens(string(tc.Arguments))
+	var usage map[string]any
+	if len(usageOverrides) > 0 && usageOverrides[0] != nil {
+		usage = usageOverrides[0]
+	} else {
+		pt := EstimateTokens(res.Text)
+		for _, tc := range calls {
+			pt += EstimateTokens(string(tc.Arguments))
+		}
+		ct := EstimateTokens(res.Text)
+		usage = map[string]any{
+			"prompt_tokens":     pt,
+			"completion_tokens": ct,
+			"total_tokens":      pt + ct,
+			"prompt_tokens_details": map[string]any{
+				"cached_tokens": 0,
+			},
+			"cache_read_input_tokens": 0,
+		}
 	}
-	ct := EstimateTokens(res.Text)
 	if stream {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -68,12 +82,12 @@ func writeToolResponse(w http.ResponseWriter, id, model string, stream bool, sen
 			}
 		}
 		if sendUsage {
-			usageChunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": nil}}, "usage": map[string]any{"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct}}
+			usageChunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []any{}, "usage": usage}
 			_ = sseSafeRaw(w, flusher, "data: "+mustJSON(usageChunk)+"\n\n")
 		}
 		_ = sseSafeRaw(w, flusher, "data: [DONE]\n\n")
 		return nil
 	}
-	jsonOut(w, map[string]any{"id": id, "object": "chat.completion", "created": time.Now().Unix(), "model": model, "choices": []any{map[string]any{"index": 0, "message": msg, "finish_reason": "tool_calls"}}, "m365": compatM365Metadata(res), "usage": map[string]any{"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct}})
+	jsonOut(w, map[string]any{"id": id, "object": "chat.completion", "created": time.Now().Unix(), "model": model, "choices": []any{map[string]any{"index": 0, "message": msg, "finish_reason": "tool_calls"}}, "m365": compatM365Metadata(res, model), "usage": usage})
 	return nil
 }

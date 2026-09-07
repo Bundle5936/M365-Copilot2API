@@ -14,12 +14,18 @@ func envTrue(name string) bool {
 	return false
 }
 
-func compatM365Metadata(res chathub.Result) map[string]any {
+func compatM365Metadata(res chathub.Result, model ...string) map[string]any {
 	m := map[string]any{
 		"conversationId": res.ConversationID,
 		"sessionId":      res.SessionID,
 		"requestId":      res.RequestID,
 		"usage_source":   "unavailable_from_chathub",
+	}
+	if len(model) > 0 && model[0] != "" {
+		_, source := tokenEstimator(model[0])
+		m["usage_source"] = source
+		m["usage_values_are_estimates"] = true
+		m["usage_estimate_scope"] = "visible_request_and_completion"
 	}
 	if res.Throttling != nil {
 		m["throttling"] = res.Throttling

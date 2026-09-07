@@ -124,3 +124,56 @@ func localUsageMetadata(source string) map[string]any {
 		"usage_includes":             []string{"message_content", "message_framing", "tool_schemas", "tool_choice", "tool_calls", "completion_framing"},
 	}
 }
+
+// buildOpenAIUsage returns a local estimate. ChatHub does not expose billing
+// token counts, so cached_tokens is reported only when the gateway actually
+// reused a cached conversation prefix. It must not be guessed from message
+// length: doing so makes Pi display cache hits that never happened.
+//
+// cachedMessageCounts is optional for compatibility with callers/tests. When
+// present, it is the number of logical request messages already stored in the
+// reused ChatHub conversation; those messages form the known reusable prefix.
+func buildOpenAIUsage(model string, messages []oaiMsg, tools []chathub.Tool, toolChoice any, output string, convReused bool, cachedMessageCounts ...int) map[string]any {
+	estimate := estimateResponsesUsage(model, messages, tools, toolChoice, output)
+	inTokens, _ := estimate.Values["input_tokens"].(int)
+	outTokens, _ := estimate.Values["output_tokens"].(int)
+	if inTokens < 1 {
+		inTokens = 1
+	}
+	if outTokens < 1 {
+		outTokens = 1
+	}
+
+	cachedTokens := 0
+	if convReused && len(messages) > 0 {
+		prefixMessages := len(messages) - 1
+		if len(cachedMessageCounts) > 0 && cachedMessageCounts[0] > 0 {
+			prefixMessages = cachedMessageCounts[0]
+		}
+		if prefixMessages > len(messages) {
+			prefixMessages = len(messages)
+		}
+		if prefixMessages > 0 {
+			prefix := estimateResponsesUsage(model, messages[:prefixMessages], nil, nil, "")
+			cachedTokens, _ = prefix.Values["input_tokens"].(int)
+			if cachedTokens < 0 {
+				cachedTokens = 0
+			}
+			if cachedTokens > inTokens {
+				cachedTokens = inTokens
+			}
+		}
+	}
+
+	return map[string]any{
+		"prompt_tokens":     inTokens,
+		"completion_tokens": outTokens,
+		"total_tokens":      inTokens + outTokens,
+		"prompt_tokens_details": map[string]any{
+			"cached_tokens": cachedTokens,
+		},
+		// Kept for clients that use the Responses-style alias. Pi reads
+		// prompt_tokens_details.cached_tokens for Chat Completions.
+		"cache_read_input_tokens": cachedTokens,
+	}
+}

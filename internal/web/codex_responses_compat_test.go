@@ -55,6 +55,36 @@ func TestResponsesUnknownModelUsesHeuristicFallback(t *testing.T) {
 	}
 }
 
+func TestOpenAIUsageDoesNotInventCacheOnMiss(t *testing.T) {
+	messages := []oaiMsg{
+		{Role: "system", Content: "A stable system instruction."},
+		{Role: "user", Content: "hello"},
+	}
+	usage := buildOpenAIUsage("gpt-5.6-sol", messages, nil, nil, "OK", false)
+	details, ok := usage["prompt_tokens_details"].(map[string]any)
+	if !ok || details["cached_tokens"] != 0 || usage["cache_read_input_tokens"] != 0 {
+		t.Fatalf("cache reported on miss: %#v", usage)
+	}
+}
+
+func TestOpenAIUsageReportsKnownReusedPrefix(t *testing.T) {
+	messages := []oaiMsg{
+		{Role: "system", Content: "A stable system instruction."},
+		{Role: "user", Content: "first turn"},
+		{Role: "assistant", Content: "first answer"},
+		{Role: "user", Content: "second turn"},
+	}
+	usage := buildOpenAIUsage("gpt-5.6-sol", messages, nil, nil, "second answer", true, 3)
+	details, ok := usage["prompt_tokens_details"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing prompt token details: %#v", usage)
+	}
+	cached, _ := details["cached_tokens"].(int)
+	if cached <= 0 || usage["cache_read_input_tokens"] != cached {
+		t.Fatalf("known prefix was not reported consistently: %#v", usage)
+	}
+}
+
 func TestResponsesUsageIncludesToolSchemaAndChoice(t *testing.T) {
 	base := estimateResponsesUsage("gpt-5.5", []oaiMsg{{Role: "user", Content: "weather"}}, nil, nil, "")
 	tools := []chathub.Tool{{Type: "function", Function: json.RawMessage(`{"name":"weather","description":"Get weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}`)}}
