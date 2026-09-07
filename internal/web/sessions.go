@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,16 +30,38 @@ type sessionStore struct {
 }
 
 func openSessionStore() *sessionStore {
-	path := os.Getenv("M365_SESSION_CACHE")
+	// M365_SESSION_CACHE is owned by sessionResolver and stores a JSON array.
+	// Keep the legacy session-key conversation index in a separate file so the
+	// two stores cannot overwrite each other with incompatible JSON shapes.
+	path := strings.TrimSpace(os.Getenv("M365_SESSION_STORE"))
+	legacyPath := strings.TrimSpace(os.Getenv("M365_SESSION_CACHE"))
 	if path == "" {
-		path = filepath.Join(os.TempDir(), "m365-copilot2api-sessions.json")
+		if legacyPath != "" {
+			path = filepath.Join(filepath.Dir(legacyPath), "conversation-sessions.json")
+		} else {
+			path = filepath.Join(os.TempDir(), "m365-copilot2api-sessions.json")
+		}
 	}
 	s := &sessionStore{path: path, data: map[string]conversation{}}
 	s.persist = &persistStore{flush: s.flush}
-	if b, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(b, &s.data); err != nil {
-			log.Printf("[sessions] failed to unmarshal %s: %v", path, err)
+	load := func(file string, reportError bool) bool {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			return false
 		}
+		if err := json.Unmarshal(b, &s.data); err != nil {
+			if reportError {
+				log.Printf("[sessions] failed to unmarshal %s: %v", file, err)
+			}
+			return false
+		}
+		return true
+	}
+	if !load(path, true) && legacyPath != "" && legacyPath != path {
+		// One-time compatibility read for installations that used the old map
+		// format before M365_SESSION_CACHE became the resolver's array store.
+		// An array at the legacy path is expected and is ignored silently.
+		load(legacyPath, false)
 	}
 	return s
 }

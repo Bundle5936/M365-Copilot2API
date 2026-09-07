@@ -22,6 +22,7 @@ ENV M365_LISTEN=0.0.0.0:4141 \
     M365_CONFIG=/data/accounts.json \
     M365_TOKEN_CACHE=/data/token-cache.json \
     M365_SESSION_CACHE=/data/sessions.json \
+    M365_SESSION_STORE=/data/conversation-sessions.json \
     M365_API_KEYS=/data/api-keys.json \
     M365_ADMIN_PASSWORD_FILE=/data/admin-password.json
 VOLUME ["/data"]
