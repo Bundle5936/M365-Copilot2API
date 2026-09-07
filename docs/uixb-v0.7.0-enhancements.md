@@ -35,14 +35,13 @@ It contains deployment and compatibility fixes that were validated against a rea
 
 ## Validation
 
-The following package tests passed during validation:
+The following package tests passed during validation in a Go 1.23 Alpine test container:
 
 ```text
-go test ./internal/web
-go test ./internal/chathub
-go test ./internal/auth
-go test ./internal/outbound
+go test ./internal/web ./internal/chathub ./internal/auth ./internal/outbound
 ```
+
+The full suite was also attempted. The only failure was the existing `internal/mcp/TestStdioMCPRoundTrip` dependency on `python3`, which is not installed in the minimal Alpine test image; the modified packages passed.
 
 A real Pi CLI session also verified:
 
