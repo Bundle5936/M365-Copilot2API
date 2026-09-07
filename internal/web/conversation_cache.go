@@ -2,6 +2,7 @@ package web
 
 import (
 	"crypto/sha256"
+	"os"
 	"encoding/hex"
 	"m365-copilot2api/internal/chathub"
 	"sync"
@@ -37,6 +38,9 @@ func (c *conversationCache) key(namespace, accountID, model string) string {
 }
 
 func (c *conversationCache) Lookup(namespace, accountID, model string) *cachedConversation {
+	if os.Getenv("M365_DISABLE_CONV_CACHE") == "true" {
+		return nil
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry := c.entries[c.key(namespace, accountID, model)]
@@ -51,6 +55,9 @@ func (c *conversationCache) Lookup(namespace, accountID, model string) *cachedCo
 }
 
 func (c *conversationCache) Store(namespace, accountID, model string, conv *cachedConversation) {
+	if os.Getenv("M365_DISABLE_CONV_CACHE") == "true" {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	conv.LastUsedAt = time.Now()

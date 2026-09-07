@@ -45,6 +45,7 @@ func checkMeteringError(mi any) error {
 		if !ok {
 			continue
 		}
+		log.Printf("[metering-debug] item=%+v", m)
 		meterErr, _ := m["meterError"].(string)
 		hasAccess, _ := m["hasAccess"].(bool)
 		if meterErr != "" && !hasAccess {

@@ -1,23 +1,36 @@
 services:
   m365-copilot2api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: m365-copilot2api:latest
     container_name: m365-copilot2api
     restart: unless-stopped
+    env_file:
+      - .env
     ports:
-      - "127.0.0.1:4141:4141"
+      - "4141:4141"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      M365_LISTEN: 0.0.0.0:4141
-      M365_DATA_DIR: /data
-      M365_CONFIG: /data/accounts.json
-      M365_TOKEN_CACHE: /data/token-cache.json
-      M365_SESSION_CACHE: /data/sessions.json
-      M365_API_KEYS: /data/api-keys.json
-      M365_ADMIN_PASSWORD_FILE: /data/admin-password
-      M365_ADMIN_PASSWORD_BOOTSTRAP_FILE: /run/secrets/m365_admin_password
-      M365_CHAT_TIMEOUT_SECONDS: "120"
-      M365_IMAGE_TIMEOUT_SECONDS: "150"
-      M365_PUBLIC_IDENTITY_POLICY: "${M365_PUBLIC_IDENTITY_POLICY:-false}"
+      - TZ=Asia/Shanghai
+      - M365_LISTEN=0.0.0.0:4141
+      - M365_DATA_DIR=/data
+      - M365_CONFIG=/data/accounts.json
+      - M365_TOKEN_CACHE=/data/token-cache.json
+      - M365_SESSION_CACHE=/data/sessions.json
+      - M365_API_KEYS=/data/api-keys.json
+      - M365_ADMIN_PASSWORD_FILE=/data/admin-password.json
+      - M365_DISABLE_CONV_CACHE=false
+      - M365_CONTEXT_WINDOW=272000
+      - M365_TOOL_PLANNING_MODE=router
+      - M365_CHAT_TIMEOUT_SECONDS=300
     volumes:
       - ./data:/data
-      - ./secrets/m365_admin_password:/run/secrets/m365_admin_password:ro
+      - /etc/localtime:/etc/localtime:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:4141/login || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
