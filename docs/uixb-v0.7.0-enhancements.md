@@ -25,6 +25,12 @@ It contains deployment and compatibility fixes that were validated against a rea
 - Image generation can try the next eligible account after an account-level failure or quota response.
 - Image-only cooldown state no longer disables regular text chat for the same account.
 
+### Session-store persistence
+
+- The resolver's array-based `M365_SESSION_CACHE` and the legacy map-based session-key index now use separate files.
+- `M365_SESSION_STORE` can explicitly select the map-based store; the deployment defaults it to `conversation-sessions.json`.
+- Existing installations using the old path are read for compatibility, while an expected resolver array is ignored without a startup warning.
+
 ### Runtime defaults
 
 - The container includes timezone data and CA certificates.
@@ -48,5 +54,7 @@ A real Pi CLI session also verified:
 1. The model returned a standard `tool_calls` request.
 2. Pi executed the requested Bash tool and returned the tool result.
 3. The following turn reused the same conversation prefix and reported a non-zero `cacheRead` value.
+
+After separating the two session stores, the rebuilt container remained healthy and no longer emitted the old `sessions.json` array-versus-map warning at startup.
 
 The values exposed by this compatibility layer are estimates for visible request and completion content, not provider billing records.
