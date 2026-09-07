@@ -2,10 +2,10 @@ package web
 
 import (
 	"bytes"
-	"errors"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"

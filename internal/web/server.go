@@ -2903,7 +2903,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			"message":       assistant,
 			"finish_reason": "stop",
 		}},
-		"m365": compatM365Metadata(res, model),
+		"m365":  compatM365Metadata(res, model),
 		"usage": usageMap,
 	})
 }
