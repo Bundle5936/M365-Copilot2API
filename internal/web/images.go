@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"errors"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -46,6 +47,47 @@ type imageGenerationRequest struct {
 	Attachments    []chathub.Attachment `json:"attachments,omitempty"`
 }
 
+func (s *Server) resolveImageAccounts(r *http.Request, explicitID string) []auth.AccountToken {
+	if explicitID != "" {
+		if acc, err := s.tokens.EnsureValid(explicitID); err == nil {
+			return []auth.AccountToken{acc}
+		}
+		return nil
+	}
+
+	boundIDs := s.apiKeys.accountIDs(rawAPIKey(r))
+	all := s.tokens.List()
+	var candidates []auth.AccountToken
+	for _, item := range all {
+		if !s.tokens.ScheduleEnabled(item.ID) {
+			continue
+		}
+		if len(boundIDs) > 0 {
+			found := false
+			for _, bid := range boundIDs {
+				if bid == item.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+		candidates = append(candidates, item)
+	}
+
+	var healthy, limited []auth.AccountToken
+	for _, c := range candidates {
+		if s.accountPool != nil && s.accountPool.ImageLimited(c.ID) {
+			limited = append(limited, c)
+		} else {
+			healthy = append(healthy, c)
+		}
+	}
+	return append(healthy, limited...)
+}
+
 func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 	startedAt := time.Now()
 	if r.Method != http.MethodPost {
@@ -73,20 +115,12 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "response_format must be url or b64_json")
 		return
 	}
-	acc, err := s.resolveAccount(firstNonEmpty(b.AccountID, b.User))
-	if err != nil {
-		writeUpstreamError(w, err)
+	accounts := s.resolveImageAccounts(r, firstNonEmpty(b.AccountID, b.User))
+	if len(accounts) == 0 {
+		writeOpenAIError(w, http.StatusBadGateway, "account_error", "no available accounts for image generation")
 		return
 	}
-	if acc.OID == "" || acc.TID == "" {
-		acc.OID, acc.TID = extractOIDTID(acc.AccessToken)
-	}
-	if acc.OID == "" || acc.TID == "" {
-		writeOpenAIError(w, 400, "invalid_request_error", "account missing oid/tid — re-login with PKCE")
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(s.settings.get().ImageTimeoutSeconds)*time.Second)
-	defer cancel()
+
 	size := b.Size
 	if size == "" {
 		size = "1024x1024"
@@ -101,44 +135,74 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 		endpoint = "/v1/images/edits"
 		prompt = fmt.Sprintf("Edit the first attached image with GPT Image 2. Size: %s. Instructions: %s. Preserve everything not requested to change. Return the edited image URL directly.", size, b.Prompt)
 	}
-	res, err := s.chatWithAccount(ctx, acc.ID, chathub.Account{AccessToken: acc.AccessToken, OID: acc.OID, TID: acc.TID}, chathub.Request{Text: prompt, Tone: "magic", Attachments: b.Attachments, LicenseType: s.settings.get().LicenseType, Scenario: s.settings.get().Scenario, FeatureFlags: s.featureFlags()})
-	if err != nil {
-		writeUpstreamError(w, err)
-		return
-	}
-	log.Printf("[image-gen] conversation=%s images=%d text_len=%d events=%d raw_len=%d", res.ConversationID, len(res.Images), len(res.Text), len(res.Events), len(res.RawResult))
-	if len(res.Images) == 0 {
-		if urls := extractImageURLs(res.RawResult); len(urls) > 0 {
-			res.Images = urls
+
+	var res chathub.Result
+	var selectedAcc auth.AccountToken
+	var lastErr error
+
+	for _, candidate := range accounts {
+		acc, err := s.tokens.EnsureValid(candidate.ID)
+		if err != nil {
+			lastErr = err
+			continue
 		}
-	}
-	if len(res.Images) == 0 {
-		if urls := extractImageURLs(res.Text); len(urls) > 0 {
-			res.Images = urls
+		if acc.OID == "" || acc.TID == "" {
+			acc.OID, acc.TID = extractOIDTID(acc.AccessToken)
 		}
-	}
-	if len(res.Images) == 0 {
-		refusalText := strings.Join([]string{res.Text, res.RawResult}, "\n")
-		if isImageQuotaRefusal(refusalText) {
-			w.Header().Set("Retry-After", "86400")
-			writeOpenAIError(w, http.StatusTooManyRequests, "rate_limit_error", "M365 image generation quota is exhausted; try again later or use another account")
-			return
+		if acc.OID == "" || acc.TID == "" {
+			continue
 		}
-		textPreview := res.Text
-		if len(textPreview) > 500 {
-			textPreview = textPreview[:500]
+
+		attemptCtx, cancelAttempt := context.WithTimeout(r.Context(), time.Duration(s.settings.get().ImageTimeoutSeconds)*time.Second)
+		attemptRes, attemptErr := s.chatWithAccount(attemptCtx, acc.ID, chathub.Account{AccessToken: acc.AccessToken, OID: acc.OID, TID: acc.TID}, chathub.Request{Text: prompt, Tone: "magic", Attachments: b.Attachments, LicenseType: s.settings.get().LicenseType, Scenario: s.settings.get().Scenario, FeatureFlags: s.featureFlags()})
+		cancelAttempt()
+
+		if attemptErr != nil {
+			log.Printf("[image-gen] account=%s err=%v, attempting next account", acc.Email, attemptErr)
+			if s.accountPool != nil {
+				s.accountPool.MarkImageLimited(acc.ID)
+			}
+			lastErr = attemptErr
+			continue
 		}
-		rawPreview := ""
-		if len(res.RawResult) > 0 {
-			rawPreview = res.RawResult
-			if len(rawPreview) > 500 {
-				rawPreview = rawPreview[:500]
+
+		log.Printf("[image-gen] conversation=%s account=%s images=%d text_len=%d events=%d raw_len=%d", attemptRes.ConversationID, acc.Email, len(attemptRes.Images), len(attemptRes.Text), len(attemptRes.Events), len(attemptRes.RawResult))
+		if len(attemptRes.Images) == 0 {
+			if urls := extractImageURLs(attemptRes.RawResult); len(urls) > 0 {
+				attemptRes.Images = urls
 			}
 		}
-		debug := map[string]any{"text": textPreview, "raw_len": len(res.RawResult), "events": len(res.Events), "images": res.Images, "raw_preview": rawPreview}
-		b, _ := json.Marshal(debug)
-		log.Printf("[image-gen-debug] %s", string(b))
-		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "upstream returned no image resource")
+		if len(attemptRes.Images) == 0 {
+			if urls := extractImageURLs(attemptRes.Text); len(urls) > 0 {
+				attemptRes.Images = urls
+			}
+		}
+		if len(attemptRes.Images) == 0 {
+			refusalText := strings.Join([]string{attemptRes.Text, attemptRes.RawResult}, "\n")
+			if isImageQuotaRefusal(refusalText) || strings.Contains(strings.ToLower(refusalText), "quota") || strings.Contains(strings.ToLower(refusalText), "limit") {
+				log.Printf("[image-gen] account=%s hit image quota refusal, trying next", acc.Email)
+				if s.accountPool != nil {
+					s.accountPool.MarkImageLimited(acc.ID)
+				}
+				lastErr = errors.New("image generation quota reached on account")
+				continue
+			}
+			lastErr = errors.New("upstream returned no image resource")
+			continue
+		}
+
+		res = attemptRes
+		selectedAcc = acc
+		lastErr = nil
+		break
+	}
+
+	if len(res.Images) == 0 {
+		if lastErr != nil {
+			writeUpstreamError(w, lastErr)
+		} else {
+			writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "upstream returned no image resource")
+		}
 		return
 	}
 	images := res.Images
@@ -171,13 +235,14 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if designerToken == "" {
-			designerToken, err = s.designerAccessToken(acc)
-			if err != nil {
-				writeOpenAIError(w, http.StatusBadGateway, "upstream_error", upstreamError(err))
+			tok, dErr := s.designerAccessToken(selectedAcc)
+			if dErr != nil {
+				writeOpenAIError(w, http.StatusBadGateway, "upstream_error", upstreamError(dErr))
 				return
 			}
+			designerToken = tok
 		}
-		imageData, contentType, err := downloadDesignerImage(ctx, sourceURL, designerToken)
+		imageData, contentType, err := downloadDesignerImage(r.Context(), sourceURL, designerToken)
 		if err != nil {
 			log.Printf("[image-gen-download] err=%v", err)
 			writeOpenAIError(w, http.StatusBadGateway, "upstream_error", upstreamError(err))
@@ -194,7 +259,7 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 	s.usage.record(UsageRecord{
 		Time:         time.Now(),
 		APIKeyPrefix: extractAPIKey(r),
-		AccountEmail: acc.Email,
+		AccountEmail: selectedAcc.Email,
 		Model:        firstNonEmpty(b.Model, "gpt-image-2"),
 		Endpoint:     endpoint,
 		InputTokens:  EstimateTokens(prompt),

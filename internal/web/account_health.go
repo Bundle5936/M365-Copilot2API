@@ -500,7 +500,7 @@ func (h *accountHealth) MarkImageLimited(accountID string) {
 	defer h.mu.Unlock()
 	h.imageLimited[accountID] = true
 	h.imageLimitUntil[accountID] = time.Now().Add(24 * time.Hour)
-	h.cooldown[accountID] = time.Now().Add(24 * time.Hour)
+	// Do NOT mark global h.cooldown so regular text chat remains unaffected.
 }
 
 func (h *accountHealth) ImageLimited(accountID string) bool {
