@@ -90,14 +90,14 @@ jobs:
             cat > "$body_file" <<EOF
           ## Upstream sync conflict
 
-          The maintained branch \\`${TARGET_BRANCH}\\` cannot merge upstream release \\`${upstream_ref}\\` automatically.
+          The maintained branch \`${TARGET_BRANCH}\` cannot merge upstream release \`${upstream_ref}\` automatically.
 
-          Upstream commit: \\`$(git rev-parse "refs/tags/${upstream_ref}^{commit}")\\`
+          Upstream commit: \`$(git rev-parse "refs/tags/${upstream_ref}^{commit}")\`
 
           Conflicting files:
-          \\`\\`\\`
+          \`\`\`
           ${conflict_files}
-          \\`\\`\\`
+          \`\`\`
 
           Please ask the LXC Pi assistant to inspect and resolve this release. The branch and production deployment were not changed.
           EOF
