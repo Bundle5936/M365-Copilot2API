@@ -99,7 +99,7 @@ jobs:
           ${conflict_files}
           \`\`\`
 
-          Please ask the LXC Pi assistant to inspect and resolve this release. The branch and production deployment were not changed.
+          Manual review required to inspect upstream release notes, reconcile conflicts against the maintained branch, and verify tests.
           EOF
             existing="$(gh issue list --state open --search "[upstream-sync] ${upstream_ref} in:title" --json number --jq 'length')"
             if [ "$existing" = "0" ]; then
