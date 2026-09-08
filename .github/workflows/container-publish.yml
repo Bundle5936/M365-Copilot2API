@@ -1,9 +1,11 @@
 name: Publish container image
 
 on:
-  push:
-    branches:
-      - uixb-v0.7.0-enhancements
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
   workflow_dispatch:
 
 permissions:
@@ -16,14 +18,22 @@ concurrency:
 
 env:
   IMAGE_NAME: ghcr.io/bundle5936/m365-copilot2api
+  MAINTAINED_BRANCH: uixb-v0.7.0-enhancements
 
 jobs:
   publish:
     name: Build and publish multi-architecture image
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'uixb-v0.7.0-enhancements')
     runs-on: ubuntu-latest
     steps:
-      - name: Check out source
+      - name: Check out the tested commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -45,11 +55,12 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest
-            type=sha,format=short,prefix=sha-
+            type=sha,format=short,prefix=sha-,value=${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           labels: |
             org.opencontainers.image.title=M365-Copilot2API
             org.opencontainers.image.description=Microsoft 365 Copilot OpenAI and Anthropic compatible gateway
             org.opencontainers.image.source=https://github.com/Bundle5936/M365-Copilot2API
+            org.opencontainers.image.revision=${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Build and push image
         uses: docker/build-push-action@v6
