@@ -1,9 +1,7 @@
 services:
   m365-copilot2api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: m365-copilot2api:latest
+    image: ghcr.io/bundle5936/m365-copilot2api:latest
+    pull_policy: always
     container_name: m365-copilot2api
     restart: unless-stopped
     env_file:
