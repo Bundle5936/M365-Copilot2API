@@ -1,7 +1,7 @@
 services:
   m365-copilot2api:
-    image: ${M365_IMAGE:-ghcr.io/bundle5936/m365-copilot2api:latest}
-    # The pull timer updates the candidate image; deployment is explicit.
+    image: ghcr.io/bundle5936/m365-copilot2api:latest
+    # Oracle pulls the image explicitly before every automatic update.
     pull_policy: missing
     container_name: m365-copilot2api
     restart: unless-stopped

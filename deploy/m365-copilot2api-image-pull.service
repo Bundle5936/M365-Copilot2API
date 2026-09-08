@@ -1,5 +1,5 @@
 [Unit]
-Description=Pull and deploy the tested M365-Copilot2API GHCR image
+Description=Pull and automatically deploy the tested M365-Copilot2API GHCR image
 After=docker.service
 Requires=docker.service
 

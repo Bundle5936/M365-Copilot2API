@@ -1,8 +1,0 @@
-[Unit]
-Description=Deploy the approved M365-Copilot2API GHCR candidate
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/m365-copilot2api-deploy
