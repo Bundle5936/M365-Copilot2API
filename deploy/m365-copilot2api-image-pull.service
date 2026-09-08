@@ -1,0 +1,8 @@
+[Unit]
+Description=Pull and deploy the tested M365-Copilot2API GHCR image
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/m365-copilot2api-pull

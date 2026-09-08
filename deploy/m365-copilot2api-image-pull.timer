@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the M365-Copilot2API GHCR image for tested updates
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
