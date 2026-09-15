@@ -70,8 +70,7 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil && body.AccountID == "" && body.ConversationID == "" && (IsRateLimited(err) || IsAuthFailure(err)) {
 		if next, nextErr := s.nextHealthyAccount(acc.ID, accountIDs); nextErr == nil {
-			ctx2, cancel2 := context.WithTimeout(r.Context(), time.Duration(streamSettings.ChatTimeoutSeconds)*time.Second)
-			defer cancel2()
+			ctx2 := ctx
 			res, err = s.chatWithAccount(ctx2, next.ID, chathub.Account{AccessToken: next.AccessToken, OID: next.OID, TID: next.TID}, chathub.Request{
 				Text: text, Tone: body.Tone, ConversationID: body.ConversationID, SessionID: body.SessionID, Attachments: body.Attachments,
 				LicenseType: streamSettings.LicenseType, Scenario: streamSettings.Scenario,

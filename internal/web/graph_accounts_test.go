@@ -152,6 +152,47 @@ func TestGraphBatchUsersContinuesAfterFailure(t *testing.T) {
 	}
 }
 
+func TestGraphBatchUsersDoesNotCreateOAuthAuthorizedAccounts(t *testing.T) {
+	graph := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			jsonOut(w, map[string]string{"access_token": "test-token"})
+		case "/v1.0/users":
+			jsonOut(w, map[string]string{"id": "graph-created-user"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer graph.Close()
+
+	t.Setenv("M365_GRAPH_TENANT_ID", "tenant")
+	t.Setenv("M365_GRAPH_CLIENT_ID", "client")
+	t.Setenv("M365_GRAPH_CLIENT_SECRET", "secret")
+	t.Setenv("M365_GRAPH_TOKEN_URL", graph.URL+"/token")
+	t.Setenv("M365_GRAPH_BASE_URL", graph.URL)
+
+	store, err := auth.OpenStore(t.TempDir() + "/accounts.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{tokens: store}
+	body := validGraphBatchRequest()
+	body.Count = 1
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/graph/users/batch", strings.NewReader(string(encoded)))
+	s.graphBatchUsers(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if accounts := store.List(); len(accounts) != 0 {
+		t.Fatalf("Graph-provisioned users must not be represented as OAuth-authorized accounts: %+v", accounts)
+	}
+}
+
 func TestGraphEndpointsAreNotRegistered(t *testing.T) {
 	s := &Server{
 		adminPassword: "configured",

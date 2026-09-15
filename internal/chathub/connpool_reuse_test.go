@@ -1,13 +1,16 @@
 package chathub
 
 import (
+	"bufio"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -223,6 +226,43 @@ func TestConnPoolCloseIsIdempotent(t *testing.T) {
 	pool.Close()
 }
 
+func TestWaitPooledFrameResetsInactivityAfterEveryFrame(t *testing.T) {
+	frames := make(chan []byte, 1)
+	errs := make(chan error, 1)
+	done := make(chan struct{})
+	frames <- []byte("first")
+
+	msg, err, deliver := waitPooledFrame(context.Background(), done, nil, frames, errs, 20*time.Millisecond)
+	if !deliver || err != nil || string(msg) != "first" {
+		t.Fatalf("first frame: deliver=%v msg=%q err=%v", deliver, msg, err)
+	}
+	time.Sleep(15 * time.Millisecond)
+	frames <- []byte("second")
+	msg, err, deliver = waitPooledFrame(context.Background(), done, nil, frames, errs, 20*time.Millisecond)
+	if !deliver || err != nil || string(msg) != "second" {
+		t.Fatalf("second frame: deliver=%v msg=%q err=%v", deliver, msg, err)
+	}
+}
+
+func TestWaitPooledFrameTimesOutOnTrueInactivity(t *testing.T) {
+	frames := make(chan []byte)
+	errs := make(chan error)
+	done := make(chan struct{})
+	_, err, deliver := waitPooledFrame(context.Background(), done, nil, frames, errs, 10*time.Millisecond)
+	if !deliver || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deliver=%v err=%v, want inactivity deadline", deliver, err)
+	}
+}
+
+func TestWaitPooledFramePropagatesClientCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err, deliver := waitPooledFrame(ctx, make(chan struct{}), nil, make(chan []byte), make(chan error), time.Second)
+	if deliver || !errors.Is(err, context.Canceled) {
+		t.Fatalf("deliver=%v err=%v, want client cancellation", deliver, err)
+	}
+}
+
 func TestConnPoolGoroutinesReturnToSteadyState(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 	for i := 0; i < 20; i++ {
@@ -297,75 +337,114 @@ func TestConnPoolActiveWebSocketGoroutinesReturnToSteadyState(t *testing.T) {
 
 func TestConnPoolWebSocketPerformance(t *testing.T) {
 	const requests = 100
-	const concurrency = 2
+	const concurrency = 100
 
-	upgrader := websocket.Upgrader{}
-	var active atomic.Int64
-	var maximum atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		current := active.Add(1)
-		defer active.Add(-1)
-		for current > maximum.Load() && !maximum.CompareAndSwap(maximum.Load(), current) {
-		}
-		if _, _, err := conn.ReadMessage(); err != nil {
-			return
-		}
-		if err := conn.WriteMessage(websocket.TextMessage, []byte("{}")); err != nil {
-			return
-		}
-		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
+	serverDone := make(chan struct{})
+	var received atomic.Int64
+	dialer := *websocket.DefaultDialer
+	dialer.Proxy = nil
+	dialer.NetDialContext = func(context.Context, string, string) (net.Conn, error) {
+		client, server := net.Pipe()
+		go func() {
+			defer server.Close()
+			reader := bufio.NewReader(server)
+			req, err := http.ReadRequest(reader)
+			if err != nil {
 				return
 			}
-		}
-	}))
-	defer server.Close()
+			key := req.Header.Get("Sec-WebSocket-Key")
+			accept := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+			if _, err := io.WriteString(server, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "+base64.StdEncoding.EncodeToString(accept[:])+"\r\n\r\n"); err != nil {
+				return
+			}
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	latencies := make([]time.Duration, requests)
-	jobs := make(chan int)
+			readFrame := func() error {
+				header := make([]byte, 2)
+				if _, err := io.ReadFull(reader, header); err != nil {
+					return err
+				}
+				if header[1]&0x80 == 0 || header[1]&0x7f > 125 {
+					return errors.New("unexpected websocket frame")
+				}
+				mask := make([]byte, 4)
+				if _, err := io.ReadFull(reader, mask); err != nil {
+					return err
+				}
+				payload := make([]byte, int(header[1]&0x7f))
+				_, err := io.ReadFull(reader, payload)
+				return err
+			}
+
+			if err := readFrame(); err != nil {
+				return
+			}
+			if _, err := server.Write([]byte{0x81, 0x02, '{', '}'}); err != nil {
+				return
+			}
+			for received.Load() < requests {
+				if err := readFrame(); err != nil {
+					return
+				}
+				received.Add(1)
+			}
+			close(serverDone)
+		}()
+		return client, nil
+	}
+
+	wsURL := "ws://memory.test"
+	pool := NewConnPool(&dialer, nil)
+	defer pool.Close()
+	account := Account{OID: "performance", TID: "tenant"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool.Warm(ctx, account, wsURL)
+	conn, writeMu, _, _, reused, err := pool.Take(ctx, account.OID, account.TID, wsURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if !reused {
+		t.Fatal("expected warmed websocket reuse")
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, requests)
+	var ready sync.WaitGroup
 	var workers sync.WaitGroup
-	var reused atomic.Int64
+	ready.Add(concurrency)
+	workers.Add(concurrency)
 	started := time.Now()
 	for worker := 0; worker < concurrency; worker++ {
-		workers.Add(1)
-		go func(worker int) {
+		go func() {
 			defer workers.Done()
-			pool := NewConnPool(websocket.DefaultDialer, nil)
-			defer pool.Close()
-			account := Account{OID: "oid-" + string(rune('a'+worker)), TID: "tid"}
-			for index := range jobs {
-				requestStarted := time.Now()
-				pool.Warm(context.Background(), account, wsURL)
-				conn, _, _, _, hit, err := pool.Take(context.Background(), account.OID, account.TID, wsURL)
-				latencies[index] = time.Since(requestStarted)
-				if err != nil {
-					t.Errorf("websocket request failed: %v", err)
-					continue
-				}
-				if hit {
-					reused.Add(1)
-				}
-				_ = conn.Close()
+			ready.Done()
+			<-start
+			writeMu.Lock()
+			err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":6}`+rs))
+			writeMu.Unlock()
+			if err != nil {
+				errs <- err
 			}
-		}(worker)
+		}()
 	}
-	for index := range latencies {
-		jobs <- index
-	}
-	close(jobs)
+	ready.Wait()
+	close(start)
 	workers.Wait()
-	elapsed := time.Since(started)
-	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-	t.Logf("requests=%d concurrency=%d throughput=%.2f req/s p50=%s p95=%s p99=%s maximum_active=%d pool_hit_rate=%.2f%%", requests, concurrency, float64(requests)/elapsed.Seconds(), latencies[requests*50/100], latencies[requests*95/100], latencies[requests*99/100], maximum.Load(), float64(reused.Load())*100/requests)
-	if reused.Load() != requests {
-		t.Fatalf("reused=%d, want %d", reused.Load(), requests)
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent websocket operation failed: %v", err)
 	}
+	select {
+	case <-serverDone:
+	case <-ctx.Done():
+		t.Fatalf("server received %d of %d operations", received.Load(), requests)
+	}
+	if received.Load() != requests {
+		t.Fatalf("server received %d operations, want %d", received.Load(), requests)
+	}
+	elapsed := time.Since(started)
+	t.Logf("operations=%d concurrency=%d connections=1 throughput=%.2f ops/s", requests, concurrency, float64(requests)/elapsed.Seconds())
 }
 
 func BenchmarkConnPoolWebSocketPoolHit(b *testing.B) {

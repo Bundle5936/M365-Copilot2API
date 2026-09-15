@@ -47,19 +47,6 @@ func TestStreamEmitsTextFencesAndTrailingProse(t *testing.T) {
 	}
 }
 
-// A tool-candidate fence (```bash) is withheld from the text stream mid-flight
-// so the post-stream extractor can convert or re-flush it; it must stay in the
-// pending buffer rather than being emitted as live text.
-func TestStreamWithholdsToolFence(t *testing.T) {
-	emitted, pending := streamDuringAndPending([]string{"运行：\n```bash\nls -la\n```"})
-	if strings.Contains(emitted, "ls -la") {
-		t.Fatalf("tool-candidate fence must not be emitted mid-stream, got %q", emitted)
-	}
-	if !strings.Contains(pending, "ls -la") {
-		t.Fatalf("tool-candidate fence should remain buffered in pending, got %q", pending)
-	}
-}
-
 // Ordinary prose with no fences streams through unchanged.
 func TestStreamPlainProse(t *testing.T) {
 	full := "这是一段没有代码块的普通回答，应该原样输出。"

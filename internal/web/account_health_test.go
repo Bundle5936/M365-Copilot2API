@@ -27,11 +27,12 @@ func TestUpstreamErrorClassification(t *testing.T) {
 		status   int
 	}{
 		{&UpstreamHTTPError{Status: 429, RetryAfter: 90}, true, false, 90, http.StatusTooManyRequests},
-		{&UpstreamHTTPError{Status: 503}, true, false, 0, http.StatusTooManyRequests},
+		{&UpstreamHTTPError{Status: 503}, false, false, 0, http.StatusBadGateway},
+		{&UpstreamHTTPError{Status: 503, Body: "metererror quota exceeded"}, true, false, 0, http.StatusTooManyRequests},
 		{&UpstreamHTTPError{Status: 401}, false, true, 0, http.StatusUnauthorized},
 		{&UpstreamHTTPError{Status: 403}, false, true, 0, http.StatusUnauthorized},
 		{&UpstreamHTTPError{Status: 502}, false, false, 0, http.StatusBadGateway},
-		{&UpstreamHTTPError{Status: 502, Body: "account is limited"}, true, false, 0, http.StatusTooManyRequests},
+		{&UpstreamHTTPError{Status: 502, Body: "\"code\":429 metererror"}, true, false, 0, http.StatusTooManyRequests},
 		{fmt.Errorf("upstream http 429"), false, false, 0, http.StatusBadGateway},
 		{fmt.Errorf("Too many requests, slow down"), false, false, 0, http.StatusBadGateway},
 		{fmt.Errorf("account is limited"), false, false, 0, http.StatusBadGateway},
@@ -413,6 +414,34 @@ func TestScheduleAccount(t *testing.T) {
 	}
 }
 
+func TestScheduleAccountsBatch(t *testing.T) {
+	store := testAccountFiles(t)
+	s := &Server{tokens: store}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/accounts/schedule", strings.NewReader(`{"ids":["u-1","u-2"],"enabled":false}`))
+	s.scheduleAccount(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if store.ScheduleEnabled("u-1") || store.ScheduleEnabled("u-2") {
+		t.Fatal("batch scheduling did not disable every selected account")
+	}
+}
+
+func TestScheduleAccountsBatchDoesNotPartiallyUpdate(t *testing.T) {
+	store := testAccountFiles(t)
+	s := &Server{tokens: store}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/accounts/schedule", strings.NewReader(`{"ids":["u-1","missing"],"enabled":false}`))
+	s.scheduleAccount(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !store.ScheduleEnabled("u-1") {
+		t.Fatal("failed batch partially disabled an account")
+	}
+}
+
 func TestAccountsReportsCooldown(t *testing.T) {
 	store := testAccountFiles(t)
 	s := &Server{tokens: store, accountPool: newAccountHealth()}
@@ -448,6 +477,32 @@ func TestAccountsReportsCooldown(t *testing.T) {
 		return
 	}
 	t.Fatal("cooldown account missing")
+}
+
+func TestAccountsExposeConservativeCapabilityProfile(t *testing.T) {
+	store := testAccountFiles(t)
+	s := &Server{tokens: store, accountPool: newAccountHealth(), accountConcurrency: newAccountConcurrency()}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/accounts", nil)
+	s.accounts(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Accounts []struct {
+			Capabilities map[string]any `json:"capabilities"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Accounts) == 0 {
+		t.Fatal("account capability profile missing")
+	}
+	capabilities := body.Accounts[0].Capabilities
+	if capabilities["source"] != "local_observation" || capabilities["imageApiVerified"] != false {
+		t.Fatalf("unsafe capability claims: %#v", capabilities)
+	}
 }
 
 func TestFailoverAllowsResolvedConversationID(t *testing.T) {

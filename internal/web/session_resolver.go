@@ -539,6 +539,42 @@ func (sr *sessionResolver) GetConversation(tenant, conversationID string) (sessi
 	return sessionBinding{}, false
 }
 
+func (sr *sessionResolver) GetConversationByID(conversationID string) (sessionBinding, bool) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	var found sessionBinding
+	matched := false
+	for _, session := range sr.sessions {
+		if session.ConversationID != conversationID {
+			continue
+		}
+		if matched && found.AccountID != session.AccountID {
+			return sessionBinding{}, false
+		}
+		found = session
+		matched = true
+	}
+	return found, matched
+}
+
+func (sr *sessionResolver) ConversationAccountState(conversationID string) (string, bool, bool) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	accountID := ""
+	found := false
+	for _, session := range sr.sessions {
+		if session.ConversationID != conversationID {
+			continue
+		}
+		if found && accountID != session.AccountID {
+			return "", true, true
+		}
+		accountID = session.AccountID
+		found = true
+	}
+	return accountID, found, false
+}
+
 func (sr *sessionResolver) ListSessions() []sessionBinding {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()

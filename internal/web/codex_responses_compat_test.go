@@ -2,12 +2,33 @@ package web
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"m365-copilot2api/internal/chathub"
 )
+
+func TestResponsesRoutesAreTemporarilyDisabled(t *testing.T) {
+	const rawKey = "responses-disabled-test-key"
+	keys := newAPIKeyStore(filepath.Join(t.TempDir(), "api-keys.json"))
+	keys.Keys = []apiKeyRecord{{Hash: keyHash(rawKey)}}
+	s := &Server{apiKeys: keys}
+	for _, path := range []string{"/v1/responses", "/responses"} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"gpt-5.5","input":"hello"}`))
+		r.Header.Set("Authorization", "Bearer "+rawKey)
+		s.Routes().ServeHTTP(w, r)
+		if w.Code != http.StatusGone {
+			t.Fatalf("%s status=%d body=%s, want 410", path, w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), `"code":"responses_disabled"`) {
+			t.Fatalf("%s body=%s, want responses_disabled", path, w.Body.String())
+		}
+	}
+}
 
 func TestParseContentAcceptsResponsesTextBlocks(t *testing.T) {
 	content := []any{

@@ -5,14 +5,14 @@ Status legend: `[x]` verified, `[ ]` not verified, `[-]` blocked, `[c]` canceled
 ## Repository Baseline
 
 - [x] Read global `AGENTS.md`.
-- [x] Confirm project-level `AGENTS.md` is absent.
+- [x] Confirm project-level `AGENTS.md` was absent, then add release and protocol guardrails for this workstream.
 - [x] Inspect `git status`, `git diff`, and `git log --oneline -10` without altering existing work.
 - [x] Reconciled the current dirty baseline without reset, checkout, clean, deletion, or overwriting existing and unknown changes.
 
 ## Graph Authorization Wizard
 
-- [ ] Verify authorization start, status, revoke, batch user creation, error handling, and localization end to end.
-- [ ] Verify newly created accounts are not represented as OAuth-authorized accounts.
+- [-] Verify authorization start, status, revoke, batch user creation, error handling, and localization end to end. Deterministic handler coverage exists, but the Graph routes remain intentionally unregistered and real tenant end-to-end verification is blocked by missing credentials and production authorization; no real authorization result is claimed.
+- [x] Verify newly created accounts are not represented as OAuth-authorized accounts. Added `TestGraphBatchUsersDoesNotCreateOAuthAuthorizedAccounts`; it provisions through a deterministic local Graph stub, verifies the OAuth account store remains empty, and passed 20 consecutive runs with `GOROOT=D:\Go` and a 5-minute timeout in 1.789s.
 
 ## Network Fault Matrix
 
@@ -60,7 +60,7 @@ Status legend: `[x]` verified, `[ ]` not verified, `[-]` blocked, `[c]` canceled
 - [ ] P0 support `instructions`, `max_output_tokens`, `parallel_tool_calls`, `tool_choice`, `reasoning`, `include`, `temperature`, `text`, `service_tier`, `context_management`, and `previous_response_id`; reject unsafe unsupported parameters with `unsupported_parameter`.
 - [ ] P0 preserve per-turn highest-priority instructions without inheriting stale instructions through `previous_response_id`.
 - [ ] P0 fix `function_call_output`/`call_id`, `response.failed`, premature stream disconnects, UTF-8 chunk corruption, path/link damage, and deterministic dual-source event deduplication/completion.
-- [ ] P0 use only the reverse-engineered official MCP/native tool interface while preserving third-party high-priority instructions, model context, and tool-result correlation.
+- [-] P0 native ChatHub client-tool state machine is blocked by missing HAR evidence for stable call IDs, argument deltas, result continuation, and completion association. Synthetic API-plugin and MCPServer forwarding are disabled instead of inferred.
 - [ ] P0 implement a tool-state ledger for in-progress, awaiting-result, completed, and final-response states; prevent fabricated completion and premature summaries.
 
 ## Administration And Security
@@ -99,3 +99,158 @@ Status legend: `[x]` verified, `[ ]` not verified, `[-]` blocked, `[c]` canceled
 - [-] Graph 真实租户授权仍受外部凭据阻塞，因为缺少 `M365_GRAPH_CLIENT_SECRET` 和 `M365_GRAPH_TENANT_ID`；不得宣称真实租户授权已通过。
 - [ ] Keep release blocked until every required gate and real-client check has evidence.
 - [x] Do not deploy, commit, push, tag, release, touch `D:\M365-Copilot2API`, use port 4141, or change backend cooldown duration.
+
+## Zero-Downtime Production Updates
+
+## Current Requested Workstream
+
+- [x] Read global instructions, existing TODO, repository status, current diff, recent commits, and open pull requests/issues without altering unknown work.
+- [-] Load `m365-experiment-release`; the skill is not installed or discoverable in the permitted environment.
+- [x] Perform read-only structured mining of all 16 HAR files under `D:\Users\Downloads`; no HAR data was uploaded externally. The evidence contains snapshot, delta, final-result, and completion frames but no complete native client-tool lifecycle or stable upstream call ID.
+- [x] Add project `AGENTS.md` release guardrails and `docs/har-mining/10-tool-protocol-status.md`, separating observed facts, implementation inferences, and unverified tool capabilities without including credentials.
+- [x] Document and retain tool priority: client user tools first, third-party tools second, official cloud tools only as fallback.
+- [ ] Preserve system/developer instructions without overwrite, stripping, or demotion; add `system_directive_followed=false` regression coverage.
+- [ ] Fix local-file and multimodal handling without assuming `/mnt/data` or a Linux-only sandbox.
+- [ ] Fix #78 conversation forgetting, cross-session leakage, conversation switching, and cache isolation.
+- [ ] Fix #77 Responses streaming `call_id`, `name`, and `function_call_output` protocol association.
+- [ ] Fix duplicate tool call ID `bash:0`; keep tool IDs unique across turns and protocol associations stable.
+- [ ] Re-test #75 and #79 throttle/cooldown classification without changing existing cooldown durations prematurely.
+- [ ] Verify the current official GPT-5 tokenizer/encoding guidance online and record primary sources before implementation.
+- [ ] Start token estimation only after the model's first output byte; use a bounded low-priority queue, batch persistence, low-resource behavior, and non-blocking queue overflow semantics.
+- [ ] Clearly label locally estimated usage and never present it as exact upstream billing or metering.
+- [ ] Optimize reasoning/think event output while preserving protocol behavior.
+- [ ] Implement and test Windows headless startup using Task Scheduler or Windows Service, including boot startup, crash recovery, working directory/environment inheritance, log rotation, duplicate-instance prevention, uninstall, and verification.
+- [ ] Implement one-time silent stable-release checks after login, explicit user approval, SHA-256 and architecture verification, isolated updater, candidate health checks, rollback, and preserved old binaries/configuration/data.
+- [ ] Implement true zero-downtime switching through a stable proxy and blue/green instances; retain the old instance until candidate health succeeds and in-flight requests drain.
+- [ ] Rehearse update, rollback, and switching on random ports and temporary directories before any production operation.
+- [ ] Baseline the network path before modification and inject TCP reset, half-open, DNS, TLS, HTTP/2, slow-client, pool exhaustion, cancellation, backpressure, and non-idempotent replay faults.
+- [ ] Measure P50/P95/P99 latency, throughput, allocations, and goroutine steady state; do not introduce HTTP/3, a custom HTTP stack, unsafe code, or sensitive-data pooling without evidence.
+- [ ] Re-test every currently open pull request and issue relevant to this repository and record evidence individually.
+- [ ] Add unit, handler, end-to-end, concurrency, and security regression tests.
+- [ ] Run targeted tests 20 consecutive times and concurrency stress 100 consecutive times using a strategy that avoids ephemeral-port exhaustion.
+- [ ] Set `GOROOT=D:\Go` and PATH, then run `gofmt`, `go test ./... -count=1 -timeout=10m`, `go vet ./...`, `go build ./...`, and `git diff --check`.
+- [ ] Verify both `index.html`/`login.html` copies are byte-identical and contain no U+FFFD replacement character.
+- [ ] Before production switching, run independent Agent A security/protocol/leakage/DoS review and Agent B performance/UX/i18n/test/update-experience review; fix all Critical/High findings and rerun gates.
+- [ ] Preserve all existing and unknown modifications; never use reset, checkout, clean, deletion, or destructive overwrite.
+- [ ] Do not commit, push, tag, create a pull request, or publish a release without further explicit authorization in this turn.
+- [ ] Update production only after all gates pass; preserve one-command rollback and restore immediately on any failed health check.
+- [ ] Produce final evidence covering TODO status, HAR discoveries and documents, root causes, changed files with exact lines, test matrix, performance measurements, Windows startup verification, update/rollback rehearsal, production continuity, residual risks, and final git status.
+
+- [ ] Introduce a stable local listener or reverse proxy on `127.0.0.1:4141`; application instances must use separate blue and green candidate ports.
+- [ ] Preserve WebSocket upgrades, SSE streaming, request bodies, forwarding headers, timeouts, and connection-close semantics through the proxy.
+- [ ] Define readiness, liveness, version, account-pool, and critical API checks that automation can call without exposing administrator credentials.
+- [ ] Start the candidate with an explicit Windows service definition containing the executable path, working directory, arguments, environment, log destinations, and restart policy.
+- [ ] Verify the candidate version, configuration, account count, upstream connectivity, and critical API behavior before routing production traffic to it.
+- [ ] Make upstream switching atomic and retain the previous upstream as the immediate rollback target.
+- [ ] Stop assigning new requests to the old instance, then drain HTTP requests, SSE streams, WebSockets, and other long-running connections under separately defined deadlines.
+- [ ] Define WebSocket and SSE behavior during deployment, including maximum connection age, client reconnect guidance, and forced closure only after the drain deadline.
+- [ ] Audit in-memory session and conversation state; move required cross-instance state to a shared store or document which sessions must reconnect during a switch.
+- [ ] Audit every shared configuration and data file for concurrent-read, concurrent-write, advisory-lock, atomic-write, and corruption behavior before allowing blue and green instances to share it.
+- [ ] Give each instance separate temporary files, caches, PID files, and logs; keep account, key, Graph, quota, and cooldown settings unchanged.
+- [ ] Add deterministic port allocation, process ownership, stale-process detection, PID recording, and prevention of two instances binding the same candidate port.
+- [ ] Implement rollback when readiness fails, version differs, account loading changes unexpectedly, critical APIs fail, or post-switch error and latency thresholds regress.
+- [ ] Record release SHA-256, PE machine type, old and new versions and PIDs, switch timestamp, drain duration, health evidence, and rollback outcome without recording secrets.
+- [ ] Package the proxy and both application slots as Windows services with dependency ordering, restricted service identities, recovery policy, and controlled log rotation.
+- [ ] Constrain automatic updates to non-draft, non-prerelease releases with an exact tag, official `checksums.txt`, matching SHA-256, valid PE/AMD64 headers, staging-only extraction, and preserved rollback binaries.
+- [ ] Reject updates when the startup environment, working directory, command line, health authorization, data-lock behavior, or rollback path cannot be reproduced exactly.
+- [ ] Build an integration test covering healthy switch, failed candidate, post-switch regression, rollback, WebSocket/SSE drain, long requests, locked data files, and machine restart.
+- [ ] Roll out in phases: observable manual blue-green operation, scripted switch and rollback, Windows service hardening, then narrowly scoped automatic updates after repeated production-like validation.
+
+## Authorized Workstream Scope
+
+- [x] Limit work to `D:\M365-Copilot2API-dev`, local HAR files under `D:\Users\Downloads`, and the explicitly authorized production directory `D:\M365-Copilot2API`.
+- [x] Preserve all existing and unknown changes; never use reset, checkout, clean, deletion, or destructive overwrite.
+- [x] Inspect repository status, complete diff, this TODO, recent commits, production processes and listeners, scheduled tasks/services/startup state, open GitHub issues and pull requests, and the local HAR inventory.
+- [x] Confirm production PID 16316 serves `127.0.0.1:4141` from `D:\M365-Copilot2API\m365-copilot2api.exe`; no matching scheduled task, service, or startup entry was reported.
+- [x] Inventory 16 local HAR files; analyze locally only, redact secrets, and never upload HAR content.
+- [x] Keep this TODO current after every completed verification or discovered blocker.
+
+## Parallel Workstreams
+
+- [x] Add a bounded, explicit-timeout OpenCode two-model test orchestrator: AI A generates a credential-free deterministic complex task and AI B executes and verifies it while production, destructive Git operations, and port 4141 remain prohibited. execution remains dependent on locally configured OpenCode providers and credentials.
+- [ ] Agent A: read-only HAR analysis covering hidden MCP behavior, tool declarations, instruction envelopes, files, multimodal requests, conversations, reasoning, usage, rate limits, and undocumented endpoints.
+- [ ] Agent B: fix #73, system/developer instruction fidelity, local files, multimodal handling, #77, duplicate `bash:0`, conversation switching, cache isolation, and stable cross-turn tool IDs.
+- [ ] Agent C: verify official GPT-5 tokenizer guidance and implement bounded low-priority asynchronous token estimation that begins only after the first response byte, batches storage, and degrades without blocking when full.
+- [ ] Agent D: implement free local hidden Windows startup with recovery, exact working directory and environment inheritance, singleton protection, log rotation, uninstall entry point, and tests.
+- [ ] Agent E: implement stable-release detection, SHA-256 and architecture checks, independent updater, candidate health checks, proxy or dual-instance switching, draining, and rollback.
+- [ ] Agent F: establish network fault injection, performance baselines, and security review before making minimal evidence-based changes.
+- [-] Independent sub-agent execution is blocked if the current tool environment exposes no Agent/Task tool; keep workstreams non-overlapping when performed directly.
+
+## Protocol And Tool Correctness
+
+- [x] Expose a conservative per-account capability profile through the administrator-protected read-only accounts endpoint. Capabilities are derived only from local account state and observed metering; unverified image capability remains explicitly false.
+- [x] Enforce and document tool priority in the validated router prompt: user/client tools first, third-party tools second, official cloud tools only as fallback.
+- [ ] Preserve system and developer instructions without overwrite, stripping, reclassification, or downgrade.
+- [ ] Add regressions for `system_directive_followed=false` and system/developer instruction fidelity.
+- [x] Add focused `system_directive_followed=false` content-policy detection coverage, including case-insensitive failure signals and a non-rejection check for `system_directive_followed=true`; `internal/chathub` passed once and the focused tests passed 20 consecutive runs. Full system/developer instruction fidelity remains unverified.
+- [ ] Remove false claims that clients can access only `/mnt/data` or a Linux sandbox.
+- [ ] Restore local-file and multimodal recognition with handler-level and end-to-end coverage.
+- [ ] Fix #78 conversation forgetting, switching, cross-talk, and cache namespace isolation.
+- [x] Verify #77 Responses streaming `response.output_item.added` includes non-empty `call_id` and `name` before argument deltas; added a focused regression test and passed it 20 consecutive times. `function_call_output` correlation remains covered separately by the existing Responses history validation.
+- [x] Fix `duplicate tool call id: bash:0`; tool call IDs are UUID-based and a focused uniqueness regression passed 20 consecutive runs with 1,000 repeated calls per run.
+- [ ] Optimize reasoning/think handling without changing instruction priority or stream ordering.
+
+## Quota And Token Accounting
+
+- [ ] Reproduce and classify #75/#79 rate limits and cooldowns without changing existing cooldown durations.
+- [ ] Distinguish quota exhaustion, transient throttling, image quota, account-wide cooldown, and retryable transport failures.
+- [ ] Verify official GPT-5 tokenizer/encoding recommendations from primary sources.
+- [ ] Start local token estimation only after the model emits its first byte; never block first-byte latency or streaming.
+- [ ] Use a bounded queue, low-resource workers, batching, queue-full nonblocking degradation, and graceful shutdown.
+- [ ] Store estimates server-side and label them explicitly as local estimates, not upstream billing truth.
+
+## Windows Startup And Recovery
+
+- [ ] Select Task Scheduler or Windows Service based on recovery, privilege, environment, and operability evidence.
+- [ ] Run at boot without a console window using only free local components.
+- [ ] Preserve exact executable path, working directory, environment, configuration, and data locations.
+- [ ] Add singleton protection, stale-PID handling, crash recovery, bounded restart policy, and observable health state.
+- [ ] Add size/time-based log rotation with retention and no secret leakage.
+- [ ] Provide idempotent install, status, start, stop, and uninstall entry points plus automated tests.
+
+## Update And Rollback
+
+- [ ] Detect only stable non-draft, non-prerelease releases and verify exact tag, SHA-256, PE architecture, and expected files.
+- [ ] Run updates through an independent updater in a temporary directory and random candidate port.
+- [ ] Preserve old binary, configuration, data, logs, and a one-command rollback path.
+- [ ] Health-check the candidate before routing any production traffic; immediately retain or restore the old version on failure.
+- [ ] Implement genuine zero-downtime switching with a front proxy or dual-instance routing, never single-EXE port takeover on 4141.
+- [ ] Stop new traffic to the old instance and drain HTTP, SSE, WebSocket, and long-running requests under documented deadlines.
+- [ ] Exercise successful update, failed candidate, failed switch, post-switch regression, restart, and rollback scenarios.
+
+## Network Performance And Security
+
+- [ ] Establish immutable pre-change latency, throughput, allocation, goroutine, connection, and error baselines.
+- [ ] Cover TCP reset, half-open connections, DNS failure, TLS failure, HTTP/2 behavior, slow clients, pool exhaustion, cancellation propagation, and backpressure.
+- [ ] Verify non-idempotent requests are never replayed automatically.
+- [ ] Record P50/P95/P99, throughput, allocations, goroutine steady state, and resource ceilings.
+- [ ] Make only minimal evidence-supported changes; do not introduce HTTP/3, custom HTTP stacks, `unsafe`, or sensitive-data buffer pools without evidence.
+- [ ] Complete protocol, authentication, authorization, injection, secret-leakage, path/file, cross-session leakage, and denial-of-service review.
+
+## Issues Pull Requests And HAR Documentation
+
+- [ ] Reproduce and evaluate every open issue: #80, #79, #78, #77, #76, #75, #73, #72, #64, #61, #60, #51, #45, and #42.
+- [ ] Reproduce and evaluate every open pull request: #74, #71, #69, #68, #67, #63, #62, and #58.
+- [x] Document the tool-protocol HAR boundary and release decision under `docs/har-mining/10-tool-protocol-status.md`.
+- [x] Separate observed HAR evidence, implementation inferences, and unverified capabilities in the tool-protocol report.
+
+## Verification Gates
+
+- [x] Run the focused account capability, batch scheduling, and token-estimator tests 20 consecutive times with `GOROOT=D:\Go`; `internal/web` passed in 4.734s.
+- [x] Improve mobile navigation, touch targets, settings controls, tables, cards, and modal overflow while keeping both `index.html` copies byte-identical.
+- [x] Set `GOROOT=D:\Go` and prepend `D:\Go\bin` to `PATH` for every completed Go gate.
+- [x] Run `gofmt` on changed Go files.
+- [x] Run targeted image API and cache tests 20 consecutive times; `internal/web` passed in 1.870s.
+- [x] Run concurrency stress 100 consecutive times using a bounded 32-connection loopback HTTP transport that avoids ephemeral-port exhaustion; `TestServerConcurrencyLimitHTTPPerformance` performed 1000 operations per run and passed 100 consecutive runs in 8.973s.
+- [x] Run `go test ./... -count=1 -timeout=10m`; all packages passed.
+- [x] Run `go vet ./...`; passed.
+- [x] Run `go build ./...`; passed.
+- [x] Run `git diff --check`; passed with line-ending conversion warnings only.
+- [x] Verify both copies of `index.html` and `login.html` are byte-identical and contain no U+FFFD replacement character.
+- [ ] Perform a fresh independent security/protocol/cross-session-leakage/DoS review before production switching.
+- [ ] Perform a second fresh independent performance-evidence/UX/i18n/test-integrity/update-experience review before production switching.
+- [ ] Fix every Critical and High finding and rerun all affected gates.
+- [ ] Verify production continuity during candidate startup, traffic switch, drain, rollback, and machine restart.
+- [ ] Record final TODO state, workstream results, HAR findings and document paths, root causes, changed files with exact lines, test matrix, performance evidence, startup verification, update/rollback rehearsal, production continuity, residual risks, and final git status.
+- [ ] Commit, push, tag, create the v0.7.0 Release, and update production only after every required gate and both independent reviews pass; stop immediately on any gate, CI, asset, health, continuity, or rollback-check failure.
+- [ ] Keep `scripts/provision-accounts.ps1` untracked and exclude scripts, secrets, logs, build artifacts, and runtime data from staging.

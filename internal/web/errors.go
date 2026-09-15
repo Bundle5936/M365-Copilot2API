@@ -29,6 +29,9 @@ func upstreamError(err error) string {
 	if err == nil {
 		return "upstream request failed"
 	}
+	if ClassifyError(err) == CategoryClientCanceled {
+		return "client canceled request"
+	}
 	log.Printf("upstream request failed: %v", err)
 	return "upstream request failed"
 }
@@ -127,7 +130,11 @@ func writeUpstreamErrorWithAccount(w http.ResponseWriter, err error, accountID s
 			writeOpenAIError(w, status, "image_limit_error", "image generation daily limit reached; try again tomorrow")
 			return
 		}
-		writeOpenAIError(w, status, "rate_limit_error", "upstream is rate limiting; try again shortly")
+		msg := "upstream is rate limiting; try again shortly"
+		if errors.Is(err, chathub.ErrMeteringThrottled) || errors.Is(err, chathub.ErrRateLimitNotice) {
+			msg = "upstream is throttling requests; try next account or back off"
+		}
+		writeOpenAIError(w, status, "rate_limit_error", msg)
 		return
 	}
 	if IsEmptyCompletion(err) {
@@ -194,7 +201,11 @@ func writeUpstreamError(w http.ResponseWriter, err error) {
 			writeOpenAIError(w, status, "image_limit_error", "image generation daily limit reached; try again tomorrow")
 			return
 		}
-		writeOpenAIError(w, status, "rate_limit_error", "upstream is rate limiting; try again shortly")
+		msg := "upstream is rate limiting; try again shortly"
+		if errors.Is(err, chathub.ErrMeteringThrottled) || errors.Is(err, chathub.ErrRateLimitNotice) {
+			msg = "upstream is throttling requests; try next account or back off"
+		}
+		writeOpenAIError(w, status, "rate_limit_error", msg)
 		return
 	}
 	if IsEmptyCompletion(err) {

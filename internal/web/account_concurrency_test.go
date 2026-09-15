@@ -88,6 +88,84 @@ func TestAccountConcurrencyWaitHonorsCancellation(t *testing.T) {
 	}
 }
 
+func TestAccountConcurrencyRejectsUnboundedWaiters(t *testing.T) {
+	t.Setenv("M365_ACCOUNT_DEFAULT_CONCURRENCY", "1")
+	limiter := newAccountConcurrency()
+	release, err := limiter.Acquire(context.Background(), "account-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	contexts := make([]context.CancelFunc, 0, 4)
+	for i := 0; i < 4; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		contexts = append(contexts, cancel)
+		go func() {
+			queuedRelease, acquireErr := limiter.Acquire(ctx, "account-a")
+			if acquireErr == nil {
+				queuedRelease()
+			}
+		}()
+	}
+	defer func() {
+		for _, cancel := range contexts {
+			cancel()
+		}
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		limiter.mu.Lock()
+		queued := len(limiter.waiters["account-a"])
+		limiter.mu.Unlock()
+		if queued == 4 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := limiter.Acquire(ctx, "account-a"); !errors.Is(err, errAccountConcurrencyQueueFull) {
+		t.Fatalf("Acquire() error = %v, want queue full", err)
+	}
+}
+
+func TestAccountConcurrencyQueuesInFIFOOrder(t *testing.T) {
+	t.Setenv("M365_ACCOUNT_DEFAULT_CONCURRENCY", "1")
+	limiter := newAccountConcurrency()
+	release, err := limiter.Acquire(context.Background(), "account-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	acquired := make(chan int, 2)
+	for i := 1; i <= 2; i++ {
+		i := i
+		go func() {
+			nextRelease, acquireErr := limiter.Acquire(context.Background(), "account-a")
+			if acquireErr != nil {
+				t.Errorf("Acquire() error = %v", acquireErr)
+				return
+			}
+			acquired <- i
+			nextRelease()
+		}()
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	release()
+	if got := <-acquired; got != 1 {
+		t.Fatalf("first waiter = %d, want 1", got)
+	}
+	if got := <-acquired; got != 2 {
+		t.Fatalf("second waiter = %d, want 2", got)
+	}
+	if got := limiter.Inflight("account-a"); got != 0 {
+		t.Fatalf("inflight = %d, want 0", got)
+	}
+}
+
 func TestAccountConcurrencyUsesDocumentedDefault(t *testing.T) {
 	t.Setenv("M365_ACCOUNT_DEFAULT_CONCURRENCY", "")
 	limiter := newAccountConcurrency()
