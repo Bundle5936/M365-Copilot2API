@@ -103,6 +103,10 @@ body{background:var(--bg);color:var(--text);font-family:"Inter","SF Pro Display"
 .table tr:hover td{background:rgba(0,113,227,0.03)}
 @media(prefers-color-scheme:dark){.table tr:hover td{background:rgba(10,132,255,0.04)}}
 .table tr:last-child td{border-bottom:0}
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.card{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.card-body{overflow-x:auto;-webkit-overflow-scrolling:touch}
+@media(max-width:640px){.table{min-width:640px}.content{overflow-x:hidden}td:last-child .btn{flex-shrink:0}}
 .conv-row{cursor:pointer}
 .conv-link{display:block;max-width:360px;padding:0;border:0;background:transparent;color:var(--accent);font:inherit;font-weight:600;text-align:left;white-space:normal;overflow-wrap:anywhere;cursor:pointer}
 .conv-meta{font-size:11px;color:var(--muted);margin-top:3px}
@@ -215,7 +219,7 @@ body{background:var(--bg);color:var(--text);font-family:"Inter","SF Pro Display"
 
 /* Responsive */
 @media(max-width:900px){.stats{grid-template-columns:repeat(2,1fr)}.quick-grid{grid-template-columns:1fr}}
-@media(max-width:640px){.sidebar{width:48px;padding:16px 4px}.logo span,.nav-label,.nav button span,.sidebar-foot{display:none}.logo{padding-bottom:16px;justify-content:center}.nav button{padding:8px 0;justify-content:center}.topbar{padding:0 14px}.content{padding:16px}.stats{grid-template-columns:1fr}.topbar-right{display:none}}
+@media(max-width:640px){.app{display:block!important}.sidebar{width:100%;height:auto;padding:8px;position:sticky;top:0;z-index:20;overflow-x:auto;overflow-y:hidden;border-right:0;border-bottom:1px solid var(--line);flex-direction:row;gap:4px}.logo,.nav-label,.sidebar-foot{display:none}.nav{flex-direction:row;flex-shrink:0}.nav button{width:auto;min-width:44px;padding:10px;justify-content:center}.nav button span{display:none}.nav button.active::before{left:8px;right:8px;top:auto;bottom:0;width:auto;height:3px;border-radius:3px 3px 0 0}.main{min-width:0}.topbar{height:52px;padding:0 14px}.content{padding:14px}.stats{grid-template-columns:1fr}.topbar-right{display:flex}.topbar-right>span{display:none!important}.table th,.table td{padding:10px 12px}.card-body{padding:14px}.btn{min-height:40px}.form-input{min-height:44px;font-size:16px}.usage-overview{grid-template-columns:1fr 1fr}.usage-overview-item{padding:12px}.modal{max-height:calc(100vh - 24px);overflow:auto}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}}
 
 /* Usage overview card (dashboard) */
@@ -579,7 +583,8 @@ if (response.output_text) {
               </div>
             </div>
           </div>
-          <table class="table"><thead><tr><th>Account</th><th>Calls</th><th>Status</th><th>Updated</th><th>Scheduling</th><th>Proxy</th><th>Actions</th></tr></thead><tbody id="accountRows"><tr><td colspan="7" class="empty">Loading...</td></tr></tbody></table>
+          <div class="card-body" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><label style="display:flex;align-items:center;gap:6px"><input id="accountSelectAll" type="checkbox" onchange="selectAllAccounts(this.checked)"> Select all</label><button class="btn btn-sm" onclick="setSelectedAccountScheduling(true)">Enable selected</button><button class="btn btn-sm danger" onclick="setSelectedAccountScheduling(false)">Disable selected</button><span id="accountSelectionCount" class="form-hint" style="margin:0">0 selected</span></div>
+          <div style="overflow-x:auto"><table class="table"><thead><tr><th></th><th>Account</th><th>Calls</th><th>Status</th><th>Updated</th><th>Scheduling</th><th>Proxy</th><th>Actions</th></tr></thead><tbody id="accountRows"><tr><td colspan="8" class="empty">Loading...</td></tr></tbody></table></div>
         </div>
       </section>
 
@@ -655,7 +660,7 @@ if (response.output_text) {
       <!-- Settings -->
       <section id="page-settings" style="display:none">
         <h2 style="font-size:18px;font-weight:700;margin-bottom:16px">Settings</h2>
-        <div class="card"><div class="card-body"><div class="form-group"><label class="form-label">Listen address</label><input class="form-input" id="setListen" placeholder="127.0.0.1:4141"></div><div class="form-group"><label class="form-label">Chat timeout (seconds)</label><input class="form-input" id="setTimeout" type="number" placeholder="120"></div><div class="form-group"><label class="form-label" for="languageSelect">Language</label><select class="form-input" id="languageSelect"><option value="en">English</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="es">Español</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="pt-BR">Português (Brasil)</option><option value="ru">Русский</option><option value="ar">العربية</option></select><p class="form-hint">Choose the language used by the administration console.</p></div><div style="margin-top:16px"><button class="btn primary" onclick="saveSettings()">Save settings</button></div></div></div>
+        <div class="card"><div class="card-body"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px"><div class="form-group"><label class="form-label">Listen address</label><input class="form-input" id="setListen" placeholder="127.0.0.1:4141"></div><div class="form-group"><label class="form-label">Chat timeout (seconds)</label><input class="form-input" id="setTimeout" type="number" min="5" max="3600" placeholder="120"></div><div class="form-group"><label class="form-label" for="languageSelect">Language</label><select class="form-input" id="languageSelect"><option value="en">English</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="es">Español</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="pt-BR">Português (Brasil)</option><option value="ru">Русский</option><option value="ar">العربية</option></select><p class="form-hint">Choose the language used by the administration console.</p></div></div><label style="display:flex;align-items:flex-start;gap:10px;margin-top:16px"><input id="setImageApi" type="checkbox" style="margin-top:3px"><span><b>Enable experimental image API</b><span class="form-hint" style="display:block">Disabled by default. Enable only after independently verifying the upstream image protocol and credentials.</span></span></label><div style="margin-top:16px"><button class="btn primary" onclick="saveSettings()">Save settings</button></div></div></div>
       </section>
     </div>
   </main>
@@ -1211,14 +1216,14 @@ function renderAccounts(){
   });
   const rows=$('accountRows');
   rows.replaceChildren();
-  if(!list.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=7;td.className='empty';td.textContent='No matching accounts';tr.append(td);rows.append(tr);return;}
+  if(!list.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=8;td.className='empty';td.textContent='No matching accounts';tr.append(td);rows.append(tr);return;}
   list.forEach(x=>{
     const cooldown=x.cooldownUntil?`<div style="font-size:11px;color:var(--muted);margin-top:3px"><span>Cooldown until</span> ${new Date(x.cooldownUntil).toLocaleString()}</div>`:'';
     const status=x.status==='cooldown'?`<div><span class="status cooldown"><i></i>Cooldown</span>${cooldown}</div>`:x.status==='online'?'<span class="status online"><i></i>Online</span>':'<span class="status offline"><i></i>Offline</span>';
     const calls=(x.rateLimited?`<span style="color:var(--warning);font-weight:600">⚠ Limited after ${x.callCount||0} calls</span>`:`Called ${x.callCount||0} times`)+accountQuotaDetails(x);
     const scheduleEnabled=x.scheduleEnabled!==false;
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td><div class="account-cell"><div class="avatar"></div><div><b></b><div class="account-email" style="font-size:11px;color:var(--muted)"></div></div></div></td><td style="font-size:12px;white-space:nowrap">${calls}<div style="margin-top:6px"><button class="btn-sm btn" data-account-action="probe">刷新额度</button></div></td><td>${status}</td><td style="font-size:12px;color:var(--muted)">${x.updatedAt?new Date(x.updatedAt).toLocaleString():'-'}</td><td><button class="btn-sm btn${scheduleEnabled?'':' danger'}" data-account-action="schedule">${scheduleEnabled?'Enabled':'Disabled'}</button></td><td><span class="account-proxy" style="font-size:11px;word-break:break-all"></span> <button class="btn-sm btn" style="margin-top:2px" data-account-action="proxy">Bind</button></td><td><button class="btn-sm btn danger" data-account-action="delete">Delete</button></td>`;
+    tr.innerHTML=`<td><input type="checkbox" data-account-select value="${esc(x.id)}" onchange="updateAccountSelectionCount()"></td><td><div class="account-cell"><div class="avatar"></div><div><b></b><div class="account-email" style="font-size:11px;color:var(--muted)"></div></div></div></td><td style="font-size:12px;white-space:nowrap">${calls}<div style="margin-top:6px"><button class="btn-sm btn" data-account-action="probe">刷新额度</button></div></td><td>${status}</td><td style="font-size:12px;color:var(--muted)">${x.updatedAt?new Date(x.updatedAt).toLocaleString():'-'}</td><td><button class="btn-sm btn${scheduleEnabled?'':' danger'}" data-account-action="schedule">${scheduleEnabled?'Enabled':'Disabled'}</button></td><td><span class="account-proxy" style="font-size:11px;word-break:break-all"></span> <button class="btn-sm btn" style="margin-top:2px" data-account-action="proxy">Bind</button></td><td><button class="btn-sm btn danger" data-account-action="delete">Delete</button></td>`;
     tr.querySelector('.avatar').textContent=(x.displayName||x.email||'M')[0];
     tr.querySelector('b').textContent=x.displayName||x.email||'';
     tr.querySelector('.account-email').textContent=x.email||'';
@@ -1229,7 +1234,12 @@ function renderAccounts(){
     tr.querySelector('[data-account-action="delete"]').addEventListener('click',()=>deleteAccount(x.id));
     rows.append(tr);
   });
+  updateAccountSelectionCount();
 }
+function selectedAccountIds(){return [...document.querySelectorAll('[data-account-select]:checked')].map(input=>input.value);}
+function updateAccountSelectionCount(){const count=selectedAccountIds().length;$('accountSelectionCount').textContent=count+' selected';const all=[...document.querySelectorAll('[data-account-select]')];$('accountSelectAll').checked=all.length>0&&count===all.length;}
+function selectAllAccounts(checked){document.querySelectorAll('[data-account-select]').forEach(input=>input.checked=checked);updateAccountSelectionCount();}
+async function setSelectedAccountScheduling(enabled){const ids=selectedAccountIds();if(!ids.length)return showNotice('请先选择账号','error');try{await api('/api/accounts/schedule',{method:'POST',body:JSON.stringify({ids,enabled})});showNotice('批量设置已保存','success');await loadAccounts();}catch(e){showNotice(e.message,'error');}}
 async function probeAccount(id, btn){
   if(btn){ btn.disabled=true; btn.textContent='刷新中…'; }
   try{ await api('/api/admin/models/test',{method:'POST',body:JSON.stringify({model:'m365-copilot', account_id:id})}); showNotice('额度已刷新','success'); await loadAccounts(); }catch(e){ showNotice(e.message,'error'); }finally{ if(btn){ btn.disabled=false; btn.textContent='刷新额度'; } }
@@ -1885,6 +1895,7 @@ async function loadSettings(){
     const v=d.settings||{};
     $('setListen').value=v.listenAddress||'';
     $('setTimeout').value=v.chatTimeoutSeconds||120;
+    $('setImageApi').checked=v.enableImageApi===true;
   }catch(e){showNotice(e.message,'error');}
 }
 async function saveSettings(){
@@ -1894,6 +1905,7 @@ async function saveSettings(){
     const body={};
     if(listen)body.listenAddress=listen;
     if(timeout)body.chatTimeoutSeconds=parseInt(timeout);
+    body.enableImageApi=$('setImageApi').checked;
     await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(body)});
     showNotice('设置已保存','success');
   }catch(e){showNotice(e.message,'error');}

@@ -3,6 +3,7 @@ package web
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"m365-copilot2api/internal/chathub"
 	"os"
 	"sync"
@@ -18,6 +19,7 @@ type cachedConversation struct {
 	CreatedAt      time.Time
 	LastUsedAt     time.Time
 	SystemPrompt   string
+	MessagesHash   string
 }
 
 type conversationCache struct {
@@ -34,7 +36,7 @@ func newConversationCache() *conversationCache {
 }
 
 func (c *conversationCache) key(namespace, accountID, model string) string {
-	return namespace + "|" + accountID + "|" + model
+	return namespace + "\x00" + accountID + "\x00" + model
 }
 
 func (c *conversationCache) Lookup(namespace, accountID, model string) *cachedConversation {
@@ -98,6 +100,23 @@ func systemPromptHash(messages []oaiMsg) string {
 	return ""
 }
 
+func messagesHash(messages []oaiMsg) string {
+	h := sha256.New()
+	for _, m := range messages {
+		h.Write([]byte(m.Role + "\x00"))
+		h.Write([]byte(contentToString(m.Content) + "\x00"))
+		if m.ToolCallID != "" {
+			h.Write([]byte(m.ToolCallID + "\x00"))
+		}
+		if len(m.ToolCalls) > 0 {
+			b, _ := json.Marshal(m.ToolCalls)
+			h.Write(b)
+			h.Write([]byte("\x00"))
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func extractLastUserMessage(messages []oaiMsg) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" {
@@ -118,6 +137,7 @@ func (s *Server) storeConvCache(namespace, accID, model string, res chathub.Resu
 		Tone:           tone,
 		MessageCount:   len(messages),
 		SystemPrompt:   systemPromptHash(messages),
+		MessagesHash:   messagesHash(messages),
 	}
 	if cached != nil && cached.ConversationID == res.ConversationID {
 		entry.TurnCount = cached.TurnCount + 1

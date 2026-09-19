@@ -22,11 +22,12 @@ import (
 )
 
 const (
-	designerAppServiceScope  = "https://designerappservice.officeapps.live.com/.default"
-	maxGeneratedImageBytes   = 20 << 20
-	maxImageEditRequestBytes = maxGeneratedImageBytes + (2 << 20)
-	generatedImageTTL        = 15 * time.Minute
-	maxGeneratedImages       = 128
+	designerAppServiceScope     = "https://designerappservice.officeapps.live.com/.default"
+	maxGeneratedImageBytes      = 20 << 20
+	maxImageEditRequestBytes    = maxGeneratedImageBytes + (2 << 20)
+	generatedImageTTL           = 15 * time.Minute
+	maxGeneratedImages          = 128
+	maxGeneratedImageCacheBytes = 128 << 20
 )
 
 type generatedImage struct {
@@ -92,6 +93,10 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 	startedAt := time.Now()
 	if r.Method != http.MethodPost {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
+		return
+	}
+	if s.settings == nil || !s.settings.get().EnableImageAPI {
+		writeOpenAIError(w, http.StatusNotImplemented, "unsupported_feature", "image API is disabled because an independent upstream image-generation protocol has not been verified")
 		return
 	}
 	var b imageGenerationRequest
@@ -274,6 +279,10 @@ func (s *Server) imageEdits(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
 		return
 	}
+	if s.settings == nil || !s.settings.get().EnableImageAPI {
+		writeOpenAIError(w, http.StatusNotImplemented, "unsupported_feature", "image API is disabled because an independent upstream image-editing protocol has not been verified")
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxImageEditRequestBytes)
 	if err := r.ParseMultipartForm(1 << 20); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid multipart image edit request")
@@ -439,7 +448,11 @@ func (s *Server) storeGeneratedImage(data []byte, contentType string) string {
 			delete(s.generatedImages, key)
 		}
 	}
-	if len(s.generatedImages) >= maxGeneratedImages {
+	cacheBytes := 0
+	for _, item := range s.generatedImages {
+		cacheBytes += len(item.Data)
+	}
+	for len(s.generatedImages) >= maxGeneratedImages || cacheBytes+len(data) > maxGeneratedImageCacheBytes {
 		var oldestID string
 		var oldest time.Time
 		for key, item := range s.generatedImages {
@@ -447,9 +460,11 @@ func (s *Server) storeGeneratedImage(data []byte, contentType string) string {
 				oldestID, oldest = key, item.ExpiresAt
 			}
 		}
-		if oldestID != "" {
-			delete(s.generatedImages, oldestID)
+		if oldestID == "" {
+			break
 		}
+		cacheBytes -= len(s.generatedImages[oldestID].Data)
+		delete(s.generatedImages, oldestID)
 	}
 	s.generatedImages[id] = generatedImage{Data: append([]byte(nil), data...), ContentType: contentType, ExpiresAt: now.Add(generatedImageTTL)}
 	return id

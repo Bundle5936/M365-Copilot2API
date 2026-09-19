@@ -187,21 +187,35 @@ func IsRateLimited(err error) bool {
 	}
 	var httpErr *UpstreamHTTPError
 	if errors.As(err, &httpErr) {
-		if httpErr.Status == 429 || httpErr.Status == 503 {
+		if httpErr.Status == 429 {
 			return true
 		}
+		if httpErr.Status == 503 {
+			low := strings.ToLower(httpErr.Body)
+			if strings.Contains(low, "429") || strings.Contains(low, "quota") || strings.Contains(low, "rate") || strings.Contains(low, "metererror") || strings.Contains(low, "limited") {
+				return true
+			}
+			return false
+		}
 		low := strings.ToLower(httpErr.Body)
-		if strings.Contains(low, "limited") || strings.Contains(low, "图像生成功能没有成功") || strings.Contains(low, "metererror") {
+		if strings.Contains(low, "metererror") || strings.Contains(low, "\"code\":429") {
 			return true
 		}
 	}
 	var dialErr *chathub.DialError
 	if errors.As(err, &dialErr) {
-		if dialErr.Status == 429 || dialErr.Status == 503 {
+		if dialErr.Status == 429 {
 			return true
 		}
-		if dialErr.Kind == "QUOTA_429" || dialErr.Kind == "OVERLOAD_503" {
+		if dialErr.Kind == "QUOTA_429" {
 			return true
+		}
+		if dialErr.Status == 503 && dialErr.Kind == "OVERLOAD_503" {
+			low := strings.ToLower(dialErr.Error())
+			if strings.Contains(low, "429") || strings.Contains(low, "quota") {
+				return true
+			}
+			return false
 		}
 	}
 	return false
@@ -210,6 +224,10 @@ func IsRateLimited(err error) bool {
 func IsAuthFailure(err error) bool {
 	if err == nil {
 		return false
+	}
+	low := strings.ToLower(err.Error())
+	if strings.Contains(low, "invalid_grant") || strings.Contains(low, "aadsts90023") || strings.Contains(low, "aadsts70008") || strings.Contains(low, "aadsts50076") {
+		return true
 	}
 	var httpErr *UpstreamHTTPError
 	if errors.As(err, &httpErr) {

@@ -35,12 +35,34 @@ func TestWebIndexIncludesAccountMonitoringControls(t *testing.T) {
 		`data-f="cooldown"`,
 		`x.status==='cooldown'`,
 		`/api/accounts/schedule`,
+		`id="accountSelectAll"`,
+		`function selectedAccountIds()`,
+		`setSelectedAccountScheduling(true)`,
+		`setSelectedAccountScheduling(false)`,
 		`x.callCount||0`,
 		`x.rateLimited`,
 		`Limited after ${x.callCount||0} calls`,
 	} {
 		if !strings.Contains(page, needle) {
 			t.Fatalf("web index missing cooldown control %q", needle)
+		}
+	}
+}
+
+func TestWebIndexIncludesExperimentalImageSetting(t *testing.T) {
+	body, err := os.ReadFile("../../web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(body)
+	for _, needle := range []string{
+		`id="setImageApi"`,
+		`v.enableImageApi===true`,
+		`body.enableImageApi=$('setImageApi').checked`,
+		`Disabled by default. Enable only after independently verifying the upstream image protocol and credentials.`,
+	} {
+		if !strings.Contains(page, needle) {
+			t.Fatalf("web index missing image API setting %q", needle)
 		}
 	}
 }

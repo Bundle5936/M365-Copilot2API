@@ -312,6 +312,11 @@ func (s *Server) runOpenAIAdapter(r *http.Request, o oaiReq) (map[string]any, []
 	return out, rr.Body.Bytes(), rr.Code, err
 }
 
+func (s *Server) responsesDisabled(w http.ResponseWriter, r *http.Request) {
+	writeOpenAIError(w, http.StatusGone, "responses_disabled", "responses interface temporarily disabled; use /v1/chat/completions")
+	return
+}
+
 func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 	startedAt := time.Now()
 	if r.Method != http.MethodPost {
@@ -358,7 +363,7 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 			writeResponsesError(w, 400, "invalid_request_error", "unknown previous_response_id")
 			return
 		}
-		if prior.Tenant != "" && prior.Tenant != tenant {
+		if prior.Tenant == "" || prior.Tenant != tenant {
 			s.responseMu.Unlock()
 			writeResponsesError(w, 400, "invalid_request_error", "previous_response_id tenant mismatch")
 			return

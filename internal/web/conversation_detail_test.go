@@ -23,9 +23,7 @@ func TestConversationListAndDetailUseCompleteLocalHistory(t *testing.T) {
 	}
 	s := &Server{tokens: store, sessionResolver: openSessionResolver()}
 
-	oldCloudClient := m365CloudClient
-	m365CloudClient = nil
-	defer func() { m365CloudClient = oldCloudClient }()
+	s.cloudClients = newM365CloudClientManager()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	req.Header.Set("Authorization", "Bearer detail-key")
@@ -100,5 +98,22 @@ func TestConversationTimestampPrefersUpdateTime(t *testing.T) {
 	updated := time.Now().UnixMilli()
 	if got := conversationTimestamp(map[string]any{"createTimeUtc": created, "updateTimeUtc": updated}); got != updated {
 		t.Fatalf("timestamp=%d want %d", got, updated)
+	}
+}
+
+func TestM365CloudRefreshTokenChangeInvalidatesCachedAccessToken(t *testing.T) {
+	client := NewM365CloudClient("client", "tenant", "old-refresh")
+	client.accessToken = "cached-access"
+	client.expiresAt = time.Now().Add(time.Hour)
+
+	client.updateRefreshToken("new-refresh")
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.refreshToken != "new-refresh" {
+		t.Fatalf("refresh token was not updated")
+	}
+	if client.accessToken != "" || !client.expiresAt.IsZero() {
+		t.Fatalf("cached access token was not invalidated")
 	}
 }
